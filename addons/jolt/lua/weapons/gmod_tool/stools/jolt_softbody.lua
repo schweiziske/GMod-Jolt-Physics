@@ -5,7 +5,7 @@ TOOL.RequiresTraceHit = false
 TOOL.ClientConVar = {
 	mode = "create", kind = "1", quality = "2", width = "160", height = "128", mass = "4",
 	softness = "40", inflation = "45", pins = "1", palette = "1", rotation = "0", playercollision = "0",
-	iterations = "5", damping = "0.35", friction = "0.6", restitution = "0.05", vertexradius = "0.5",
+	bodyiterations = "5", bodydamping = "0.35", bodyfriction = "0.6", bodyrestitution = "0.05", vertexradius = "0.5",
 	maxvelocity = "2000", gravity = "1",
 }
 TOOL.Information = {
@@ -14,6 +14,15 @@ TOOL.Information = {
 }
 
 if CLIENT then
+	-- Server limits share the process with client cvars in a listen server.
+	-- Keep tool userinfo names distinct, preserving saved values on migration.
+	for key, legacy in pairs({bodyiterations = "iterations", bodydamping = "damping",
+		bodyfriction = "friction", bodyrestitution = "restitution"}) do
+		local previous = GetConVar("jolt_softbody_" .. legacy)
+		if previous and not GetConVar("jolt_softbody_" .. key) then
+			TOOL.ClientConVar[key] = previous:GetString()
+		end
+	end
 	I.RegisterAlias("tool.jolt_softbody.name", "jolt.soft_body_workshop")
 	I.RegisterAlias("tool.jolt_softbody.desc", "jolt.create_cloth_and_soft_balls_drag_or_pin_vertices")
 	I.RegisterAlias("tool.jolt_softbody.left", "jolt.place_soft_body_z_undo")
@@ -37,7 +46,7 @@ function TOOL:LeftClick(trace)
 	self.NextSpawn = CurTime() + 0.5
 	local input = {}
 	for key in pairs(self.ClientConVar) do
-		if key ~= "mode" then input[key] = self:GetClientNumber(key) end
+		if key ~= "mode" then input[key] = self:GetClientNumber(key, self.ClientConVar[key]) end
 	end
 	local settings = api.Config.Sanitize(input)
 	local hit, normal = trace.HitPos, trace.HitNormal

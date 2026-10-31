@@ -2,7 +2,7 @@ local I = JoltI18n or include("jolt_i18n/init.lua")
 local api = JoltSoftBodies
 local config, geometry, renderer = api.Config, api.Geometry, api.Renderer
 local toolClient = {}
-local keys = {"kind", "quality", "width", "height", "mass", "softness", "inflation", "pins", "palette", "rotation", "playercollision", "iterations", "damping", "friction", "restitution", "vertexradius", "maxvelocity", "gravity"}
+local keys = {"kind", "quality", "width", "height", "mass", "softness", "inflation", "pins", "palette", "rotation", "playercollision", "bodyiterations", "bodydamping", "bodyfriction", "bodyrestitution", "vertexradius", "maxvelocity", "gravity"}
 local state = {
 	raw = {}, nextSettings = 0, nextPick = 0, matrix = Matrix(), position = Vector(), angle = Angle(),
 	marker = Vector(), valid = false, title = I.Phrase("jolt.jolt_soft_body"), detail = "", hint = "", mode = "create",
@@ -27,7 +27,7 @@ local function settingsChanged(tool)
 	local changed = not state.settings
 	for index = 1, #keys do
 		local key = keys[index]
-		local value = tool:GetClientNumber(key)
+		local value = tool:GetClientNumber(key, tool.ClientConVar[key])
 		if state.raw[key] ~= value then state.raw[key], changed = value, true end
 	end
 	if not changed then return end
