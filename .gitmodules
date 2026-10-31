@@ -1,0 +1,4 @@
+[submodule "joltphysics/src"]
+	path = joltphysics/src
+	url = https://github.com/schweiziske/JoltPhysics-GMod.git
+	branch = main

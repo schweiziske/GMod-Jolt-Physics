@@ -1,0 +1,6 @@
+{
+  "title": "Jolt",
+  "type": "tool",
+  "tags": ["fun", "build"],
+  "ignore": ["*.md", "docs/*"]
+}
