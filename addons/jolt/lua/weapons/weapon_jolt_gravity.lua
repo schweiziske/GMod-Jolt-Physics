@@ -21,6 +21,7 @@ SWEP.Secondary.Automatic = false
 SWEP.Secondary.Ammo = "none"
 
 local settings = include("jolt_gameplay/field_settings.lua")
+local gameplay = SERVER and include("jolt_gameplay/server.lua")
 
 function SWEP:SetupDataTables()
     self:NetworkVar("Int", 0, "GravityMode")
@@ -69,7 +70,8 @@ function SWEP:Allowed(trace)
     local owner = self:GetOwner()
     if not IsValid(owner) or not owner:IsPlayer() or not owner:Alive() then return false end
     if not JoltGravity or not joltgravity or not joltgravity.Available() then
-        tell(owner, I.Phrase("jolt.gravity_module_unavailable_check_that_the_server_has_the_matching_mo"))
+        tell(owner, JoltGravity and JoltGravity.LoadError or gameplay.NativeFailure(
+            I.Phrase("jolt.gravity_module_unavailable_check_that_the_server_has_the_matching_mo")))
         return false
     end
     self:RestrictMode()

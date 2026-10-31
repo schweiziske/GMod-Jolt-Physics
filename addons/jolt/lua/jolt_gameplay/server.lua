@@ -2,17 +2,26 @@
 local I = JoltI18n or include("jolt_i18n/init.lua")
 local gameplay = {}
 
+function gameplay.NativeFailure(reason)
+	return I.Phrase("jolt.native_download_help")
+		.. " https://github.com/schweiziske/GMod-Jolt-Physics/releases/latest"
+		.. "\n" .. I.Phrase("jolt.native_install_help")
+		.. "\n" .. tostring(reason or I.Phrase("jolt.the_matching_physics_backend_is_not_loaded"))
+end
+
 function gameplay.LoadFeature(name)
 	local loaded, reason = pcall(require, "jolt")
 	if not loaded then
-		return nil, tostring(reason)
+		return nil, gameplay.NativeFailure(reason)
 	end
 
 	local available, detail = jolt.IsAvailable(name)
 	if not available then
-		return nil, detail
+		return nil, gameplay.NativeFailure(detail)
 	end
-	return jolt.Load(name)
+	local native, error = jolt.Load(name)
+	if not native then return nil, gameplay.NativeFailure(error) end
+	return native
 end
 
 function gameplay.Fail(player, reason)

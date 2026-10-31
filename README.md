@@ -67,6 +67,12 @@ They appear in the spawn menu under **Tools → Jolt** and **Weapons → Jolt**;
 
 ## For developers
 
+The main repository and the customized [JoltPhysics-GMod](https://github.com/schweiziske/JoltPhysics-GMod) submodule are open source under the MIT license. Clone both with:
+
+```sh
+git clone --recurse-submodules https://github.com/schweiziske/GMod-Jolt-Physics.git
+```
+
 - [Build guide](docs/build.md): the Lua modules need only `garrysmod_common`; the physics backend also needs a Source/GMod SDK.
 - [Physics API](docs/physics-api.md): use the extra features from Lua or C++.
 - [Feature export example](examples/physics/export/README.md): expose new Jolt functionality, from the backend all the way to Lua.

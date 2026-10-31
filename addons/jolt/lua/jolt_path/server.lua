@@ -82,7 +82,7 @@ local function loadNative()
     local native, reason = gameplay.LoadFeature("constraints")
     if not native then return nil, reason end
     if not native.PathsAvailable or not native.PathsAvailable() then
-        return nil, I.Phrase("jolt.requires_a_physics_backend_with_pathconstraint_and_gmsv_joltconstrai")
+        return nil, gameplay.NativeFailure(I.Phrase("jolt.requires_a_physics_backend_with_pathconstraint_and_gmsv_joltconstrai"))
     end
     return native
 end

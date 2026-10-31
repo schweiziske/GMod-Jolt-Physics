@@ -67,6 +67,12 @@ GMod Jolt Physics 用 [Jolt Physics](https://github.com/jrouwe/JoltPhysics) 替�
 
 ## 开发者
 
+主仓库和定制的 [JoltPhysics-GMod](https://github.com/schweiziske/JoltPhysics-GMod) 子模块均以 MIT 许可证开源。使用以下命令一并克隆：
+
+```sh
+git clone --recurse-submodules https://github.com/schweiziske/GMod-Jolt-Physics.git
+```
+
 - [构建指南](docs/build.zh-CN.md)：Lua 模块只需要 `garrysmod_common`；物理后端还需要 Source/GMod SDK。
 - [物理 API](docs/physics-api.zh-CN.md)：在 Lua 或 C++ 中使用额外玩法的能力。
 - [功能导出示例](examples/physics/export/README.zh-CN.md)：把新的 Jolt 能力从后端一路导出到 Lua。

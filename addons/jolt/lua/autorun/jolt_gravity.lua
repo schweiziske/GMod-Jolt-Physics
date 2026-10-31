@@ -42,11 +42,14 @@ function G.Sample(position)
 end
 
 if SERVER then
-    local loaded, why = pcall(require, "joltgravity")
-    if not loaded or not joltgravity or not joltgravity.Available() then
-        ErrorNoHalt(I.Text("jolt.jolt_gravity_disabled") .. tostring(why or I.Text("jolt.the_matching_physics_backend_is_not_loaded")) .. "\n")
+    local gameplay = include("jolt_gameplay/server.lua")
+    local native, why = gameplay.LoadFeature("gravity")
+    if not native then
+        G.LoadError = why
+        ErrorNoHalt(I.Text("jolt.jolt_gravity_disabled") .. I.Resolve(why) .. "\n")
         return
     end
+    G.LoadError = nil
     util.AddNetworkString("jolt_gravity_snapshot_v2")
     CreateConVar("vjolt_gravity_fields_per_player", "16", FCVAR_ARCHIVE, I.Text("jolt.maximum_gravity_regions_created_per_player_with_the_gravity_weapon"), 1, 128)
 

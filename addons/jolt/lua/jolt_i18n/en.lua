@@ -1,5 +1,7 @@
 -- Generated translation catalog. To change a translation, see addons/jolt/docs/LOCALIZATION.md.
 return {
+    ["jolt.native_download_help"] = "Jolt DLLs are missing or incompatible. Download:",
+    ["jolt.native_install_help"] = "Choose the Windows package for your game branch and 32/64-bit version. Install on the server or singleplayer host, then fully restart the game/server. Joining players do not need these DLLs.",
     ["jolt.jolt_gravity_disabled"] = "[Jolt Gravity] Disabled: ",
     ["jolt.the_matching_physics_backend_is_not_loaded"] = "The matching physics backend is not loaded",
     ["jolt.maximum_gravity_regions_created_per_player_with_the_gravity_weapon"] = "Maximum gravity regions created per player with the gravity weapon",
