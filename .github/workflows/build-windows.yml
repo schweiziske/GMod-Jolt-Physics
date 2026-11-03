@@ -1,0 +1,80 @@
+name: Windows DLL builds
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    # Fork and Dependabot PRs do not receive repository secrets.
+    if: >-
+      github.actor != 'dependabot[bot]' &&
+      (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [gmod-public-x86, gmod-public-x64, gmod-beta-x64, sdk2013-mp-x86, sdk2013-sp-x86]
+    steps:
+      - name: Checkout source and pinned Jolt
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Checkout pinned Source/GMod SDK
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: schweiziske/gmod-project-sdk
+          ssh-key: ${{ secrets.SDK_DEPLOY_KEY }}
+          ref: e3910f8106c77f356114e12c9ca7d6592489e1ef
+          path: .cache/deps/sdk
+          persist-credentials: false
+          # These profiles do not use the current Valve/TF2 submodule.
+          submodules: false
+      - name: Checkout pinned GMod Lua headers
+        if: startsWith(matrix.target, 'gmod-')
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: danielga/garrysmod_common
+          ref: f77a18d86f780a59ea30e4237016b05b790d4b70
+          path: .cache/deps/garrysmod_common
+          persist-credentials: false
+          submodules: false
+      - name: Build and package DLLs
+        shell: pwsh
+        run: >-
+          ./tools/ci/build-windows.ps1
+          -Target '${{ matrix.target }}'
+          -SdkRoot '${{ github.workspace }}/.cache/deps/sdk'
+          -GmodCommon '${{ github.workspace }}/.cache/deps/garrysmod_common'
+          -OutputRoot '${{ github.workspace }}/.cache/ci/${{ matrix.target }}'
+          -Parallel 4
+      - name: Upload package including PDB symbols
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.target }}-${{ github.sha }}
+          path: |
+            .cache/ci/${{ matrix.target }}/downloads/*.zip
+            .cache/ci/${{ matrix.target }}/downloads/*.sha256
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: logs-${{ matrix.target }}-${{ github.sha }}
+          path: .cache/ci/${{ matrix.target }}/logs/
+          if-no-files-found: warn
+          retention-days: 14

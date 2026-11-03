@@ -1270,33 +1270,11 @@ void JoltPhysicsObject::UpdateShadow( const Vector &targetPosition, const QAngle
 
 int JoltPhysicsObject::GetShadowPosition( Vector *position, QAngle *angles ) const
 {
-	const float flTimeStep = m_pEnvironment->GetSimulationTimestep();
-
-	JPH::BodyInterface &bodyInterface = m_pPhysicsSystem->GetBodyInterfaceNoLock();
-
-	JPH::Vec3 joltPosition, joltLinearVelocity, joltAngularVelocity;
-	JPH::Quat joltRotation;
-
-	bodyInterface.GetPositionAndRotation( m_pBody->GetID(), joltPosition, joltRotation );
-	bodyInterface.GetLinearAndAngularVelocity( m_pBody->GetID(), joltLinearVelocity, joltAngularVelocity );
-
-	if ( position )
-	{
-		*position = JoltToSource::Distance( joltPosition + ( joltLinearVelocity * flTimeStep ) );
-	}
-	if ( angles )
-	{
-		// From Jolt's AddRotationStep.
-
-		JPH::Vec3 joltAngularVelocityTimesDT = joltAngularVelocity * flTimeStep;
-		float len = joltAngularVelocityTimesDT.Length();
-
-		JPH::Quat newQuat = joltRotation;
-		if ( len > 1.0e-6f ) 
-			newQuat = ( JPH::Quat::sRotation( joltAngularVelocityTimesDT / len, len ) * joltRotation ).Normalized();
-		*angles = JoltToSource::Angle( newQuat );
-	}
-
+	// IVP samples its next PSI pose, which is already integrated when Simulate
+	// returns. Jolt's stored transform is also the completed step's pose.
+	// Extrapolating it by another timestep makes rotating pushers overshoot their
+	// targets; CheckPushedEntity treats that error as a block and rolls them back.
+	GetPosition( position, angles );
 	return 1;
 }
 

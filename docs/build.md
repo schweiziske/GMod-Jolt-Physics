@@ -82,6 +82,35 @@ cmake --build .cache/backend-avx2 --config Release --target vphysics vphysics_jo
 
 For 32-bit, use `-A Win32` with 32-bit SDK libraries and a separate build directory per variant. The wrapper picks one backend based on the CPU and does not fall back to another variant if that file is missing, so build all three for distribution.
 
+### Current Source SDK Base 2013 Multiplayer (64-bit)
+
+Use `gmod-project-sdk`'s `sdk2013-current` profile and pinned Valve submodule. Run on the designated remote Windows build host:
+
+```powershell
+$SdkRoot = "C:/deps/gmod-project-sdk/upstream/source-sdk-2013/src"
+cmake -S vphysics_jolt -B .cache/sdk2013-current-avx2 -G "Visual Studio 17 2022" -A x64 `
+  "-DVOLT_GMOD_SDK=$SdkRoot" -DVOLT_ENGINE_BRANCH=sdk2013 `
+  -DSOURCE_SDK_PROFILE=sdk2013-current -DSDK_BUILD_TESTS=OFF -DVOLT_CPU_VARIANT=avx2
+cmake --build .cache/sdk2013-current-avx2 --config Release --target vphysics vphysics_jolt_avx2 --parallel
+```
+
+This builds matching tier1/mathlib from source and links Valve's x64 libraries. Build `sse42` and `sse2` in separate directories for those backends. The full package contains the wrapper and all three backends, installed into **Source SDK Base 2013 Multiplayer's `bin/x64/`**.
+
+### Legacy Source SDK 2013 MP / SP (32-bit)
+
+Use `gmod-project-sdk`'s `sdk2013-mp/src` or `sdk2013-sp/src` with its matching 32-bit Release libraries. Run on the designated remote Windows build host:
+
+```powershell
+$SdkRoot = "C:/deps/gmod-project-sdk/sdk2013-mp/src"
+cmake -S vphysics_jolt -B .cache/sdk2013-mp -G "Visual Studio 17 2022" -A Win32 `
+  "-DVOLT_GMOD_SDK=$SdkRoot" -DVOLT_ENGINE_BRANCH=sdk2013 -DVOLT_CPU_VARIANT=avx2
+cmake --build .cache/sdk2013-mp --config Release --target vphysics vphysics_jolt_avx2 --parallel
+```
+
+For SP, select `sdk2013-sp/src` and a separate build directory. Do not reuse a GMod beta CMake cache or set `SOURCE_SDK_PROFILE=gmod-beta`.
+
+This command builds only the AVX2 backend and requires an AVX2-capable CPU.
+
 ## Installing your build
 
 Files go in the same places as in the [installation guide](../gmsv_jolt/INSTALL.md#3-install):

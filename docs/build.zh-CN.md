@@ -82,6 +82,35 @@ cmake --build .cache/backend-avx2 --config Release --target vphysics vphysics_jo
 
 32 位版本改用 `-A Win32` 和 32 位的 SDK 库，每个变体使用单独的构建目录。包装层按 CPU 选择要加载的后端，所选文件缺失时不会退回到其他变体，所以发布时三个变体都要构建。
 
+### 当前 Source SDK Base 2013 Multiplayer（64 位）
+
+使用 `gmod-project-sdk` 的 `sdk2013-current` 配置及锁定的 Valve 官方子模块。在指定远端 Windows 构建主机执行：
+
+```powershell
+$SdkRoot = "C:/deps/gmod-project-sdk/upstream/source-sdk-2013/src"
+cmake -S vphysics_jolt -B .cache/sdk2013-current-avx2 -G "Visual Studio 17 2022" -A x64 `
+  "-DVOLT_GMOD_SDK=$SdkRoot" -DVOLT_ENGINE_BRANCH=sdk2013 `
+  -DSOURCE_SDK_PROFILE=sdk2013-current -DSDK_BUILD_TESTS=OFF -DVOLT_CPU_VARIANT=avx2
+cmake --build .cache/sdk2013-current-avx2 --config Release --target vphysics vphysics_jolt_avx2 --parallel
+```
+
+该配置从源码编译匹配的 tier1/mathlib，链接 Valve x64 库。SSE4.2、SSE2 使用各自构建目录及 `sse42`、`sse2` 变体。完整包包含包装层与三个后端，安装位置是 **Source SDK Base 2013 Multiplayer 的 `bin/x64/`**。
+
+### 旧版 Source SDK 2013 MP / SP（32 位）
+
+使用 `gmod-project-sdk` 的 `sdk2013-mp/src` 或 `sdk2013-sp/src` 及其对应的 32 位 Release 库，在指定远端 Windows 构建主机运行：
+
+```powershell
+$SdkRoot = "C:/deps/gmod-project-sdk/sdk2013-mp/src"
+cmake -S vphysics_jolt -B .cache/sdk2013-mp -G "Visual Studio 17 2022" -A Win32 `
+  "-DVOLT_GMOD_SDK=$SdkRoot" -DVOLT_ENGINE_BRANCH=sdk2013 -DVOLT_CPU_VARIANT=avx2
+cmake --build .cache/sdk2013-mp --config Release --target vphysics vphysics_jolt_avx2 --parallel
+```
+
+SP 使用 `sdk2013-sp/src` 和独立构建目录。不要复用 GMod beta 的 CMake 缓存或设置 `SOURCE_SDK_PROFILE=gmod-beta`。
+
+以上命令只生成 AVX2 后端，需要支持 AVX2 的 CPU。
+
 ## 安装构建产物
 
 文件放置位置与[安装指南](../gmsv_jolt/INSTALL.zh-CN.md#3-安装)相同：

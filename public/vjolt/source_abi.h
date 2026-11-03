@@ -26,10 +26,11 @@ struct SpatialPartitionABI
 #endif
 };
 
-// public's Ray_t has no transform pointer. Never read its padding as a pointer.
+// SDK 2013 and public GMod rays have no transform pointer.
+// Never read their padding as a pointer.
 inline const matrix3x4_t *RayWorldAxisTransform( const Ray_t &ray )
 {
-#if defined( GMOD_SDK_PUBLIC ) && GMOD_SDK_PUBLIC
+#if ( defined( GAME_SDK2013 ) && !defined( GAME_GMOD ) ) || ( defined( GMOD_SDK_PUBLIC ) && GMOD_SDK_PUBLIC )
     return nullptr;
 #else
     return ray.m_pWorldAxisTransform;
@@ -38,12 +39,16 @@ inline const matrix3x4_t *RayWorldAxisTransform( const Ray_t &ray )
 
 inline void ClearRayWorldAxisTransform( Ray_t &ray )
 {
-#if !defined( GMOD_SDK_PUBLIC ) || !GMOD_SDK_PUBLIC
+#if !( defined( GAME_SDK2013 ) && !defined( GAME_GMOD ) ) && ( !defined( GMOD_SDK_PUBLIC ) || !GMOD_SDK_PUBLIC )
     ray.m_pWorldAxisTransform = nullptr;
 #endif
 }
 
-#if defined( GMOD_SDK_PUBLIC ) && GMOD_SDK_PUBLIC
+#if defined( GAME_SDK2013 ) && !defined( GAME_GMOD )
+// Legacy MP/SP use the same ray and collision records, independently of GMod.
+static_assert( offsetof( Ray_t, m_IsRay ) == 64, "SDK 2013 Ray_t flag offset" );
+static_assert( sizeof( vcollide_t ) == ( sizeof( void * ) == 8 ? 24 : 12 ), "SDK 2013 vcollide_t layout" );
+#elif defined( GMOD_SDK_PUBLIC ) && GMOD_SDK_PUBLIC
 // GMod's public SDK exposes the legacy interface family on both Windows
 // targets. Its optional x64 extension members do not determine pointer width,
 // so validate the actual compiled layout instead.
