@@ -194,6 +194,8 @@ function server.Register(owner, settings, mesh, body, position)
 		return nil, I.Phrase("jolt.unable_to_read_the_initial_soft_body_snapshot")
 	end
 	if entity.CPPISetOwner then entity:CPPISetOwner(owner) end
+	if entity.SetInflation then entity:SetInflation(settings.inflation or 0) end
+	if api.Feedback then api.Feedback.Register(record) end
 	return record
 end
 
@@ -327,6 +329,7 @@ local function think()
 		end
 	end
 	if api.Tearing then api.Tearing.Think(now) end
+	if api.Feedback then api.Feedback.Think(now) end
 	if api.Replication then api.Replication.Think(now) end
 end
 

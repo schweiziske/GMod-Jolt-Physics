@@ -19,6 +19,18 @@ Attachments drive vertices to follow props; they do not apply rope tension back 
 
 Open **Q → Tools → Jolt → Soft Body Workshop** and pick a mode in the panel.
 
+### Inflation and impact feedback
+
+**Inflate / deflate** operates on existing soft balls. Aim and hold LMB to inflate or RMB to deflate, at approximately 50 percentage points per second, within 0–100%. The server picks and authorizes the target; the HUD shows inflation and damage.
+
+New bodies enable impact feedback by default. Actual soft-body / rigid-body contacts collect normal vertex velocity changes and an energy estimate; the main thread consumes these to produce material sounds, a brief local highlight and accumulated damage darkening. Bullet/explosion damage impulses use the same feedback path. A minimum speed threshold and 0.15-second cooldown suppress small jitter and sound spam; damage resistance controls accumulation.
+
+Dents and recovery come from the physical solver: fabric and rubber remain elastic, while foam and foil enable plasticity. With the separate breakage checkbox enabled, 100% damage attempts a transverse cut at the impact on cloth/strands, subject to the existing quotas. Balls instead lose approximately 35 inflation percentage points per second. Pumping a punctured ball does not repair its leak.
+
+The optional `VJoltSoftBodyImpact001` extension provides Lua `body:SetImpactTracking(true)` and `body:ConsumeImpact([output])`. The latter clears and returns the strongest contact update since the previous read: `contacts`, `vertex`, `speed`, `energy`, `pos`; no new contact means `contacts=0`. Speed is normal velocity change in Source units/s, and energy is a joule-valued strength estimate, not exact dissipated collision energy or a material fracture model. Worker threads never invoke Lua.
+
+Gameplay hooks: server `JoltSoftBodyImpact(entity, event)` and `JoltSoftBodyBroken(entity)` on first reaching the enabled breakage condition. Events contain `strength`, `damage`, `speed`, `energy`, `vertex` and `position`.
+
 **Create soft body**: choose cloth or a soft ball and set its size, mesh quality, total mass (default 4 kg, shared by all vertices), softness, inflation (balls), pins (cloth: none, top corners or the entire top edge), color, rotation and player collision. The solver settings below them are capped by the server settings. The panel shows the vertex and triangle count and the bandwidth per nearby player. Left-click a surface within 600 units to place the body; Z and Sandbox cleanup remove it.
 
 Softness scales edge and bend compliance logarithmically. Inflation sets a ball's gas energy (nRT) from its mass and size; it is neither a pressure in pascals nor a target volume.

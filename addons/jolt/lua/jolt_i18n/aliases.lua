@@ -34,4 +34,9 @@ return {
     ["tool.jolt_softbody.name"] = "jolt.soft_body_workshop",
     ["tool.jolt_softbody.reload"] = "jolt.finish_dragging",
     ["tool.jolt_softbody.right"] = "jolt.toggle_selected_vertex_s_pin_state",
+    ["tool.jolt_softbody.mount"] = "jolt.mount_help",
+    ["tool.jolt_softbody.unmount"] = "jolt.unmount_help",
+    ["tool.jolt_softbody.cut"] = "jolt.cut_help",
+    ["tool.jolt_softbody.inflate"] = "jolt.inflate_help",
+    ["tool.jolt_softbody.deflate"] = "jolt.deflate_help",
 }

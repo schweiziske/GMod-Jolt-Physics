@@ -4,6 +4,7 @@
 #include <vjolt/softbody.h>
 #include <vjolt/softbody_tools.h>
 #include <vjolt/softbody_fragment.h>
+#include <vjolt/softbody_impact.h>
 #include <array>
 #include <cmath>
 #include <filesystem>
@@ -49,6 +50,86 @@ std::vector<VJoltSoftBodyVertexState> Read( IVJoltSoftBodyBridge &bridge, VJoltS
 			&& v.position.z >= state.boundsMin.z - 0.01f && v.position.z <= state.boundsMax.z + 0.01f, "bounds enclose live vertex" );
 	return vertices;
 }
+void ImpactTests( IPhysics &physics, IPhysicsCollision &collision, IVJoltSoftBodyBridge &bridge, IVJoltSoftBodyImpact &impacts )
+{
+	std::array<float, 2> peak{};
+	for ( int trial = 0; trial < 2; ++trial )
+	{
+		auto *env = physics.CreateEnvironment();
+		env->SetGravity( Vector( 0, 0, 0 ) ); env->SetSimulationTimestep( dt );
+		auto *floorShape = collision.BBoxToCollide( Vector( -512, -512, -16 ), Vector( 512, 512, 0 ) );
+		objectparams_t params{}; params.mass = 1; params.inertia = 1; params.rotInertiaLimit = 0.05f;
+		params.enableCollisions = true; params.pName = "impact_floor";
+		env->CreatePolyObjectStatic( floorShape, 0, Vector( 0, 0, 0 ), QAngle( 0, 0, 0 ), &params );
+		std::array<VJoltSoftBodyVertex, 9> vertices;
+		for ( uint32_t i = 0; i < 9; ++i ) vertices[i] = { { float( i % 3 ) * 10, float( i / 3 ) * 10, 0 }, 0.25f, 0 };
+		auto faces = Faces( 3 );
+		VJoltSoftBodyMesh mesh;
+		mesh.vertexCount = 9; mesh.vertices = vertices.data(); mesh.triangleCount = 8; mesh.triangles = faces.data();
+		VJoltSoftBodySettings settings; settings.position = { 0, 0, 40 }; settings.damping = 0;
+		VJoltSoftBodyError error;
+		const auto handle = bridge.Create( 0, mesh, settings, &error );
+		Check( handle != 0 && impacts.SetImpactTracking( handle, true ), "enable contact tracking" );
+		for ( int i = 0; i < 8; ++i ) env->Simulate( dt );
+		VJoltSoftBodyImpact impact;
+		Check( impacts.ConsumeImpact( handle, impact ) && impact.contacts == 0, "no contacts produce no feedback" );
+		const float speed = trial ? 500.0f : 100.0f;
+		bridge.SetVelocity( handle, { 0, 0, -speed } );
+		for ( int i = 0; i < 64; ++i )
+		{
+			env->Simulate( dt );
+			Check( impacts.ConsumeImpact( handle, impact ), "consume native impact" );
+			if ( impact.energy > peak[trial] )
+			{
+				peak[trial] = impact.energy;
+				Check( impact.contacts > 0 && impact.vertex < 9 && impact.speed > 30, "impact contains contacted vertex and speed" );
+				Check( std::abs( impact.position.z ) < 2, "contact location lies on floor" );
+			}
+			VJoltSoftBodyImpact empty;
+			Check( impacts.ConsumeImpact( handle, empty ) && empty.contacts == 0, "impact consumed exactly once" );
+		}
+		Check( peak[trial] > 0, "falling soft body emits native collision feedback" );
+		Check( impacts.SetImpactTracking( handle, false ), "disable contact tracking" );
+		bridge.SetVelocity( handle, { 0, 0, -speed } ); env->Simulate( dt );
+		Check( impacts.ConsumeImpact( handle, impact ) && impact.contacts == 0, "disabled tracking stays empty" );
+		physics.DestroyEnvironment( env ); collision.DestroyCollide( floorShape );
+		Check( !impacts.ConsumeImpact( handle, impact ), "retired handle rejects impact reads" );
+	}
+	Check( peak[1] > peak[0] * 4, "hard collision produces more energy than gentle collision" );
+}
+
+void DentTests( IPhysics &physics, IVJoltSoftBodyBridge &bridge, IVJoltSoftBodyTools &tools )
+{
+	std::array<float, 2> dent{};
+	for ( int trial = 0; trial < 2; ++trial )
+	{
+		auto *env = physics.CreateEnvironment();
+		env->SetGravity( Vector( 0, 0, 0 ) ); env->SetSimulationTimestep( dt );
+		std::array<VJoltSoftBodyVertex, 9> vertices;
+		for ( uint32_t i = 0; i < 9; ++i ) vertices[i] = { { float( i % 3 ) * 10, float( i / 3 ) * 10, 0 }, 0.25f, 1 };
+		auto faces = Faces( 3 );
+		VJoltSoftBodyMesh mesh;
+		mesh.vertexCount = 9; mesh.vertices = vertices.data(); mesh.triangleCount = 8; mesh.triangles = faces.data();
+		VJoltSoftBodySettings settings; settings.position = { 0, 0, 100 };
+		settings.flags |= VJoltSoftBodyDihedralBend;
+		settings.edgeCompliance = 0.000001f; settings.bendCompliance = 0.0001f;
+		VJoltSoftBodyError error;
+		const auto handle = bridge.Create( 0, mesh, settings, &error );
+		Check( handle != 0, "create dent test shell" );
+		VJoltSoftBodyPlasticity plastic; plastic.yield = 0.01f; plastic.creep = trial ? 20.0f : 0; plastic.maxStrain = 0.9f;
+		Check( tools.SetPlasticity( handle, plastic ), "set elastic / plastic shell" );
+		bridge.SetVertexVelocity( handle, 4, { 0, 0, 10 / dt } ); env->Simulate( dt );
+		bridge.SetVertexVelocity( handle, 4, {} );
+		for ( int i = 0; i < 24; ++i ) env->Simulate( dt );
+		bridge.SetVertexPinned( handle, 4, false );
+		for ( int i = 0; i < 96; ++i ) env->Simulate( dt );
+		dent[trial] = std::abs( Read( bridge, handle )[4].position.z - 100 );
+		physics.DestroyEnvironment( env );
+	}
+	Check( dent[0] < 0.2f, "elastic shell recovers after indentation" );
+	Check( dent[1] > 3, "plastic shell retains permanent indentation" );
+}
+
 void Run( IPhysics &physics, IVJoltSoftBodyBridge &bridge, IVJoltSoftBodyFragment &fragments, IVJoltSoftBodyTools &tools )
 {
 	for ( bool dihedral : { false, true } )
@@ -159,9 +240,20 @@ int wmain( int argc, wchar_t **argv )
 	auto *bridge = static_cast<IVJoltSoftBodyBridge *>( factory( VJOLT_SOFTBODY_BRIDGE_VERSION, nullptr ) );
 	auto *tools = static_cast<IVJoltSoftBodyTools *>( factory( VJOLT_SOFTBODY_TOOLS_VERSION, nullptr ) );
 	auto *fragments = static_cast<IVJoltSoftBodyFragment *>( factory( VJOLT_SOFTBODY_FRAGMENT_VERSION, nullptr ) );
-	if ( !physics || !bridge || !tools || !fragments || !physics->Connect( cvarFactory ) || physics->Init() != INIT_OK ) return 4;
+	auto *impacts = static_cast<IVJoltSoftBodyImpact *>( factory( VJOLT_SOFTBODY_IMPACT_VERSION, nullptr ) );
+	auto *collision = static_cast<IPhysicsCollision *>( factory( VPHYSICS_COLLISION_INTERFACE_VERSION, nullptr ) );
+	auto *surfaces = static_cast<IPhysicsSurfaceProps *>( factory( VPHYSICS_SURFACEPROPS_INTERFACE_VERSION, nullptr ) );
+	if ( !physics || !bridge || !tools || !fragments || !impacts || !collision || !surfaces
+		|| !physics->Connect( cvarFactory ) || physics->Init() != INIT_OK ) return 4;
+	surfaces->ParseSurfaceData( "softbody", "\"default\" { \"friction\" \"0.5\" \"elasticity\" \"0\" }" );
 	int result = 0;
-	try { Run( *physics, *bridge, *fragments, *tools ); std::cout << "PASS fragment checks=" << checks << '\n'; }
+	try
+	{
+		Run( *physics, *bridge, *fragments, *tools );
+		ImpactTests( *physics, *collision, *bridge, *impacts );
+		DentTests( *physics, *bridge, *tools );
+		std::cout << "PASS fragment / impact checks=" << checks << '\n';
+	}
 	catch ( const std::exception &error ) { std::cerr << "FAIL after " << checks << " checks: " << error.what() << '\n'; result = 1; }
 	physics->Shutdown(); physics->Disconnect(); FreeLibrary( library ); FreeLibrary( runtime );
 	return result;

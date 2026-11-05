@@ -140,10 +140,13 @@ local function think()
 				renderer.SetLight(record.render, light.x, light.y, light.z)
 				record.nextLight = now + 0.5
 			end
-			local redraw = record.visible and record.renderedRevision ~= record.buffer.revision
+			local feedbackChanged = renderer.Feedback and renderer.Feedback(record.render, record.entity, playbackAt)
+			local redraw = record.visible and (record.renderedRevision ~= record.buffer.revision or feedbackChanged or record.feedbackDirty)
+			record.feedbackDirty = feedbackChanged or record.feedbackDirty
 			if redraw then
 				renderer.Update(record.render, record.buffer.display, true)
 				record.renderedRevision = record.buffer.revision
+				record.feedbackDirty = false
 			end
 			if changed or redraw then
 				-- Bounds update outside Draw so a culled body can re-enter the view.

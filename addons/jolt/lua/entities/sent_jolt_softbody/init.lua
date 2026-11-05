@@ -21,7 +21,10 @@ function ENT:OnTakeDamage(info)
 	if length < 0.01 then return end
 	local magnitude = math.min(length, math.max(1, info:GetDamage()) * math.min(record.settings.mass, 50) * 3)
 	local radius = math.max(16, record.settings.width * 0.18)
-	record.body:AddImpulseAt(info:GetDamagePosition(), force * (magnitude / length), radius)
+	local applied = record.body:AddImpulseAt(info:GetDamagePosition(), force * (magnitude / length), radius)
+	if applied and JoltSoftBodies.Feedback then
+		JoltSoftBodies.Feedback.Damage(record, info:GetDamagePosition(), magnitude)
+	end
 	record.forceSample = true
 end
 

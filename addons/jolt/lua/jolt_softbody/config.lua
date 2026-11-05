@@ -124,6 +124,10 @@ function config.Sanitize(input)
 		plasticyield = config.ClampNumber(input.plasticyield, 0.05, 0.001, 1),
 		plasticcreep = config.ClampNumber(input.plasticcreep, 0, 0, 20),
 		plasticstrain = config.ClampNumber(input.plasticstrain, 0.6, 0, 0.95),
+		feedback = input.feedback == nil or input.feedback == 1 or input.feedback == true,
+		impactbreak = input.impactbreak == 1 or input.impactbreak == true,
+		impactthreshold = config.ClampNumber(input.impactthreshold, 80, 20, 1000),
+		toughness = config.ClampNumber(input.toughness, 1, 0.1, 10),
 	}
 end
 

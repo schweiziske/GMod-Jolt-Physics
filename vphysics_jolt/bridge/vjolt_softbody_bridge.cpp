@@ -6,6 +6,9 @@
 #include "vjolt_interface.h"
 #include "vjolt_layers.h"
 #include <vjolt/softbody_fragment.h>
+#include <vjolt/softbody_impact.h>
+#include <Jolt/Physics/SoftBody/SoftBodyContactListener.h>
+#include <Jolt/Physics/SoftBody/SoftBodyManifold.h>
 
 #include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
 #include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
@@ -37,6 +40,8 @@ struct SoftBodyRecord
 	JPH::Body *body = nullptr;
 	PreparedMesh mesh;
 	VJoltSoftBodySettings creationSettings;
+	std::vector<JPH::Float3> impactVelocities;
+	VJoltSoftBodyImpact pendingImpact;
 	VJoltSoftBodyPlasticity plasticity;
 	std::vector<float> originalEdgeLengths;
 	std::vector<float> originalBendAngles;
@@ -87,7 +92,8 @@ bool IsValidRange( uint32_t first, uint32_t count, size_t size, const Value *out
 	return first <= size && count <= size - first && ( count == 0 || output != nullptr );
 }
 
-class SoftBodyBridge final : public IVJoltSoftBodyBridge, public IVJoltSoftBodyTools, public IVJoltSoftBodyFragment
+class SoftBodyBridge final : public IVJoltSoftBodyBridge, public IVJoltSoftBodyTools,
+	public IVJoltSoftBodyFragment, public IVJoltSoftBodyImpact, public JPH::SoftBodyContactListener
 {
 public:
 	uint32_t GetVersion() const override
@@ -618,6 +624,71 @@ public:
 		return true;
 	}
 
+	bool SetImpactTracking( VJoltSoftBodyHandle handle, bool enabled ) override
+	{
+		auto *record = FindIdle( handle );
+		if ( !record ) return false;
+		try
+		{
+			record->impactVelocities.resize( enabled ? record->mesh.inverseMasses.size() : 0 );
+			record->pendingImpact = {};
+			if ( enabled )
+			{
+				record->environment->GetPhysicsSystem()->SetSoftBodyContactListener( this );
+				CaptureImpactVelocities( *record );
+			}
+			return true;
+		}
+		catch ( const std::bad_alloc & ) { return false; }
+	}
+
+	bool ConsumeImpact( VJoltSoftBodyHandle handle, VJoltSoftBodyImpact &impact ) override
+	{
+		auto *record = FindIdle( handle );
+		if ( !record || impact.size != sizeof( impact ) ) return false;
+		impact = record->pendingImpact;
+		record->pendingImpact = {};
+		return true;
+	}
+
+	void OnSoftBodyContactAdded( const JPH::Body &body, const JPH::SoftBodyManifold &manifold ) override
+	{
+		// Topology and the handle map are immutable during Simulate. Jolt updates
+		// a soft body on one worker at a time; each callback writes only its record.
+		SoftBodyRecord *record = nullptr;
+		for ( const auto &entry : m_Bodies )
+			if ( entry.second->body == &body ) { record = entry.second.get(); break; }
+		if ( !record || record->impactVelocities.empty() ) return;
+		VJoltSoftBodyImpact impact;
+		const auto &vertices = manifold.GetVertices();
+		const auto transform = body.GetCenterOfMassTransform();
+		float strongest = 0;
+		for ( uint32_t i = 0; i < vertices.size(); ++i )
+		{
+			const auto &vertex = vertices[i];
+			if ( manifold.HasContact( vertex ) && vertex.mInvMass > 0 )
+			{
+				const float speed = std::abs( ( vertex.mVelocity - JPH::Vec3( record->impactVelocities[i] ) )
+					.Dot( manifold.GetContactNormal( vertex ) ) );
+				const float energy = 0.5f * speed * speed / record->mesh.inverseMasses[i];
+				if ( std::isfinite( energy ) && std::isfinite( speed ) )
+				{
+					++impact.contacts;
+					impact.energy += energy;
+					if ( speed > strongest )
+					{
+						strongest = speed;
+						impact.vertex = i;
+						impact.position = ToSource( JPH::Vec3( transform * manifold.GetLocalContactPoint( vertex ) ) );
+					}
+				}
+			}
+			vertex.mVelocity.StoreFloat3( &record->impactVelocities[i] );
+		}
+		impact.speed = JoltToSource::Distance( strongest );
+		if ( impact.energy > record->pendingImpact.energy ) record->pendingImpact = impact;
+	}
+
 	void AfterSimulation( JoltPhysicsEnvironment *environment, float deltaTime )
 	{
 		for ( auto &entry : m_Bodies )
@@ -682,14 +753,24 @@ public:
 	{
 		RemoveMatching( [environment]( const SoftBodyRecord &record )
 			{ return record.environment == environment && record.retiring; } );
+		for ( const auto &entry : m_Bodies )
+			if ( entry.second->environment == environment ) CaptureImpactVelocities( *entry.second );
 	}
 
 	void EnvironmentDestroyed( JoltPhysicsEnvironment *environment )
 	{
+		environment->GetPhysicsSystem()->SetSoftBodyContactListener( nullptr );
 		RemoveMatching( [environment]( const SoftBodyRecord &record ) { return record.environment == environment; } );
 	}
 
 private:
+	static void CaptureImpactVelocities( SoftBodyRecord &record )
+	{
+		const auto &vertices = record.Motion().GetVertices();
+		for ( size_t i = 0; i < record.impactVelocities.size(); ++i )
+			vertices[i].mVelocity.StoreFloat3( &record.impactVelocities[i] );
+	}
+
 	static void CreateNativeBody(
 		SoftBodyRecord &record, const VJoltSoftBodyMesh &mesh, const VJoltSoftBodySettings &settings )
 	{
@@ -779,6 +860,9 @@ EXPOSE_SINGLE_INTERFACE_GLOBALVAR(
 
 EXPOSE_SINGLE_INTERFACE_GLOBALVAR(
 	SoftBodyBridge, IVJoltSoftBodyFragment, VJOLT_SOFTBODY_FRAGMENT_VERSION, g_SoftBodyBridge );
+
+EXPOSE_SINGLE_INTERFACE_GLOBALVAR(
+	SoftBodyBridge, IVJoltSoftBodyImpact, VJOLT_SOFTBODY_IMPACT_VERSION, g_SoftBodyBridge );
 
 void VJoltSoftBodyBeforeSimulation( JoltPhysicsEnvironment *environment )
 {

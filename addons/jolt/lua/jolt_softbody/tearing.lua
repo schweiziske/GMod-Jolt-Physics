@@ -35,6 +35,7 @@ function tearing.Split(record, seam)
 	local family = record.family
 	family.pieces = family.pieces + 1
 	for _, child in ipairs(created) do api.Server.Track(child, family) end
+	if api.Feedback then api.Feedback.Inherit(record, created) end
 	record.entity:Remove()
 	return true, created
 end

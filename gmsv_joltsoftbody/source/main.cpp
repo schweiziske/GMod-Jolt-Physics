@@ -3,6 +3,7 @@
 #include <vjolt/loader.h>
 #include <vjolt/softbody_tools.h>
 #include <vjolt/softbody_fragment.h>
+#include <vjolt/softbody_impact.h>
 
 #include <algorithm>
 #include <array>
@@ -19,6 +20,7 @@ using namespace JoltSoftBodyLua;
 IVJoltSoftBodyBridge *g_Bridge = nullptr;
 IVJoltSoftBodyTools *g_Tools = nullptr;
 IVJoltSoftBodyFragment *g_Fragment = nullptr;
+IVJoltSoftBodyImpact *g_Impact = nullptr;
 int g_SoftBodyMeta = 0;
 std::unordered_set<VJoltSoftBodyHandle> g_OwnedBodies;
 
@@ -430,6 +432,26 @@ LUA_FUNCTION_STATIC( Trace )
 	return 1;
 }
 
+LUA_FUNCTION_STATIC( SetImpactTracking )
+{
+	return PushResult( LUA, g_Impact && LUA->IsType( 2, Type::Bool )
+		&& g_Impact->SetImpactTracking( ReadHandle( LUA ), LUA->GetBool( 2 ) ) );
+}
+
+LUA_FUNCTION_STATIC( ConsumeImpact )
+{
+	VJoltSoftBodyImpact impact;
+	if ( !g_Impact || !g_Impact->ConsumeImpact( ReadHandle( LUA ), impact ) )
+		return PushFailure( LUA, "impact read unavailable or world is stepping" );
+	if ( LUA->IsType( 2, Type::Table ) ) LUA->Push( 2 ); else LUA->CreateTable();
+	SetNumber( LUA, "contacts", impact.contacts );
+	SetNumber( LUA, "vertex", impact.vertex + 1 );
+	SetNumber( LUA, "speed", impact.speed );
+	SetNumber( LUA, "energy", impact.energy );
+	SetVector( LUA, "pos", impact.position );
+	return 1;
+}
+
 LUA_FUNCTION_STATIC( SetPlasticity )
 {
 	VJoltSoftBodyPlasticity settings;
@@ -461,6 +483,8 @@ GMOD_MODULE_OPEN()
 	g_SoftBodyMeta = LUA->CreateMetaTable( "JoltSoftBody" );
 	g_Fragment = VJoltSDK::QueryInterface<IVJoltSoftBodyFragment>( discovery.module, VJOLT_SOFTBODY_FRAGMENT_VERSION );
 	if ( g_Fragment && g_Fragment->GetVersion() != kVJoltSoftBodyFragmentVersion ) g_Fragment = nullptr;
+	g_Impact = VJoltSDK::QueryInterface<IVJoltSoftBodyImpact>( discovery.module, VJOLT_SOFTBODY_IMPACT_VERSION );
+	if ( g_Impact && g_Impact->GetVersion() != kVJoltSoftBodyImpactVersion ) g_Impact = nullptr;
 	LUA->Push( -1 );
 	LUA->SetField( -2, "__index" );
 	RegisterFunction( LUA, "__gc", Destroy );
@@ -482,6 +506,11 @@ GMOD_MODULE_OPEN()
 	RegisterFunction( LUA, "Wake", Wake );
 	RegisterFunction( LUA, "GetHandle", GetHandle );
 	if ( g_Fragment ) RegisterFunction( LUA, "CreateFragment", CreateFragment );
+	if ( g_Impact )
+	{
+		RegisterFunction( LUA, "SetImpactTracking", SetImpactTracking );
+		RegisterFunction( LUA, "ConsumeImpact", ConsumeImpact );
+	}
 	if ( g_Tools )
 	{
 		RegisterFunction( LUA, "Trace", Trace );
@@ -515,5 +544,6 @@ GMOD_MODULE_CLOSE()
 	g_Bridge = nullptr;
 	g_Tools = nullptr;
 	g_Fragment = nullptr;
+	g_Impact = nullptr;
 	return 0;
 }

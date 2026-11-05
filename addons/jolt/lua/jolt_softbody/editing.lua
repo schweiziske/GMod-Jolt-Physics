@@ -22,7 +22,7 @@ local function activeTool(owner)
 	if not IsValid(owner) or not owner:Alive() then return end
 	local weapon = owner:GetActiveWeapon()
 	if not IsValid(weapon) or weapon:GetClass() ~= "gmod_tool" or weapon:GetMode() ~= "jolt_softbody"
-		or not ({edit = true, attach = true, cut = true})[owner:GetInfo("jolt_softbody_mode")] then return end
+		or not ({edit = true, attach = true, cut = true, pressure = true})[owner:GetInfo("jolt_softbody_mode")] then return end
 	local tool = weapon:GetToolObject("jolt_softbody")
 	return tool and tool:Allowed() and tool or nil
 end
@@ -151,6 +151,17 @@ function editing.Input(tool)
 			if right and not tool.JoltRightDown then api.Attachments.Unmount(owner) end
 		elseif mode == "cut" and left and not tool.JoltLeftDown and api.Tearing then
 			api.Tearing.Cut(owner)
+		elseif mode == "pressure" and (left or right) and api.Feedback then
+			local now = CurTime()
+			if now >= (tool.JoltNextPressure or 0) then
+				tool.JoltNextPressure = now + 0.1
+				local record, reason = editing.Pick(owner, left and 1 or 2)
+				if record and record.settings.kind == 2 then
+					api.Feedback.SetInflation(record, record.settings.inflation + (left and 5 or -5))
+				elseif left and not tool.JoltLeftDown or right and not tool.JoltRightDown then
+					gameplay.Fail(owner, record and I.Phrase("jolt.pressure_ball_only") or reason)
+				end
+			end
 		end
 	end
 	tool.JoltLeftDown, tool.JoltRightDown = left, right

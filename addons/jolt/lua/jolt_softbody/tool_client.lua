@@ -4,6 +4,7 @@ local config, geometry, renderer = api.Config, api.Geometry, api.Renderer
 local toolClient = {}
 local keys = {"kind", "quality", "width", "height", "mass", "softness", "inflation", "pins", "palette", "rotation", "playercollision", "bodyiterations", "bodydamping", "bodyfriction", "bodyrestitution", "vertexradius", "maxvelocity", "gravity"}
 for _, key in ipairs({"material", "tearing", "tearstrain", "dihedral", "plasticyield", "plasticcreep", "plasticstrain"}) do keys[#keys + 1] = key end
+for _, key in ipairs({"feedback", "impactbreak", "impactthreshold", "toughness"}) do keys[#keys + 1] = key end
 local state = {
 	raw = {}, nextSettings = 0, nextPick = 0, matrix = Matrix(), position = Vector(), angle = Angle(),
 	marker = Vector(), valid = false, title = I.Phrase("jolt.jolt_soft_body"), detail = "", hint = "", mode = "create",
@@ -70,6 +71,14 @@ local function updateText(owner)
 			state.hint = I.Phrase(owner:GetNW2Int("jolt_softbody_mount_id", 0) ~= 0 and "jolt.mount_target_hint" or "jolt.mount_pick_hint")
 		elseif state.mode == "cut" then
 			state.title, state.hint = I.Phrase("jolt.cut_softbody"), I.Phrase("jolt.cut_help")
+		elseif state.mode == "pressure" then
+			state.title, state.hint = I.Phrase("jolt.pressure_tool"), I.Phrase("jolt.pressure_help")
+			if record and IsValid(record.entity) and record.settings.kind == 2 then
+				state.detail = I.Format("jolt.inflation_percent", math.floor(record.entity:GetInflation() + 0.5))
+			end
+		end
+		if record and IsValid(record.entity) then
+			state.detail = state.detail .. I.Format("jolt.damage_percent", math.floor(record.entity:GetSoftDamage() * 100 + 0.5))
 		end
 	end
 end
@@ -157,6 +166,7 @@ function toolClient.DrawHUD()
 	draw.SimpleText(state.detail, "JoltSoftBodyHudText", x, y + 52, colors.text)
 	draw.SimpleText(state.hint, "JoltSoftBodyHudText", x, y + 96, colors.muted)
 	local controls = state.mode == "attach" and "jolt.unmount_help" or state.mode == "cut" and "jolt.cut_interior_seam"
+		or state.mode == "pressure" and "jolt.pressure_ball_only"
 		or "jolt.lmb_spawn_drag_vertex_rmb_pin_release_vertex_r_cancel_drag"
 	draw.SimpleText(I.Phrase(controls), "JoltSoftBodyHudText", x, y + 140, colors.text)
 end

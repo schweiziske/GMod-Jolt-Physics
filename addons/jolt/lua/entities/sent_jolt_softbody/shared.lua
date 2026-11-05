@@ -9,6 +9,11 @@ ENT.RenderGroup = RENDERGROUP_OPAQUE
 function ENT:SetupDataTables()
 	self:NetworkVar("Int", 0, "SoftBodyID")
 	self:NetworkVar("Bool", 0, "PlayerCollision")
+	self:NetworkVar("Float", 0, "SoftDamage")
+	self:NetworkVar("Float", 1, "ImpactStrength")
+	self:NetworkVar("Float", 2, "ImpactTime")
+	self:NetworkVar("Float", 3, "Inflation")
+	self:NetworkVar("Int", 1, "ImpactVertex")
 end
 
 -- Movement prediction needs the same filter as the server, including before

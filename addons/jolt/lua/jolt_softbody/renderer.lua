@@ -26,6 +26,7 @@ function renderer.New(topology, palette, kind, settings)
 		minimum = Vector(), maximum = Vector(), center = Vector(), revision = 0, staticRevision = -1,
 		minX = 0, minY = 0, minZ = 0, maxX = 0, maxY = 0, maxZ = 0,
 		lightR = 1, lightG = 1, lightB = 1,
+		damage = 0, impact = 0, impactVertex = 0,
 	}
 	for index = 1, topology.vertexCount do
 		data.positions[index], data.normals[index] = Vector(), Vector()
@@ -33,6 +34,17 @@ function renderer.New(topology, palette, kind, settings)
 	for index = 1, topology.vertexCount * 3 do data.numericNormals[index] = 0 end
 	for index = 1, #topology.indices do data.red[index], data.green[index], data.blue[index] = 0, 0, 0 end
 	return data
+end
+
+function renderer.Feedback(data, entity, now)
+	local damage = math.Clamp(entity:GetSoftDamage(), 0, 1)
+	local age = now - entity:GetImpactTime()
+	local flash = age >= 0 and age < 0.6 and entity:GetImpactStrength() * (1 - age / 0.6) or 0
+	flash = math.floor(math.Clamp(flash, 0, 1) * 20) / 20
+	local vertex = entity:GetImpactVertex()
+	local changed = data.damage ~= damage or data.impact ~= flash or data.impactVertex ~= vertex
+	data.damage, data.impact, data.impactVertex = damage, flash, vertex
+	return changed
 end
 
 function renderer.SetLight(data, r, g, b)
@@ -65,14 +77,22 @@ function renderer.Update(data, positions, boundsReady)
 		data.normals[index]:SetUnpacked(normals[offset + 1], normals[offset + 2], normals[offset + 3])
 	end
 	local palette = data.palette
+	local hit = data.positions[data.impactVertex]
+	local fade = 1 - data.damage * 0.5
 	for corner = 1, #topology.indices do
 		local offset = (topology.indices[corner] - 1) * 3
 		local diffuse = normals[offset + 1] * -0.35 + normals[offset + 2] * -0.3 + normals[offset + 3] * 0.88
 		-- Thin cloth is lit on both sides. The sphere keeps a directional silhouette.
 		local shade = (data.kind ~= 2 and 0.6 + 0.4 * abs(diffuse) or 0.48 + 0.52 * max(0, diffuse)) * topology.shade[corner]
-		data.red[corner] = min(255, palette.r * shade * data.lightR)
-		data.green[corner] = min(255, palette.g * shade * data.lightG)
-		data.blue[corner] = min(255, palette.b * shade * data.lightB)
+		local flash = 0
+		if hit and data.impact > 0 then
+			local point = data.positions[topology.indices[corner]]
+			flash = data.impact * max(0, 1 - point:DistToSqr(hit) / (48 * 48))
+		end
+		local r, g, b = palette.r * fade, palette.g * fade, palette.b * fade
+		data.red[corner] = min(255, (r + (255 - r) * flash) * shade * data.lightR)
+		data.green[corner] = min(255, (g + (145 - g) * flash) * shade * data.lightG)
+		data.blue[corner] = min(255, (b + (60 - b) * flash) * shade * data.lightB)
 	end
 	data.revision = data.revision + 1
 end

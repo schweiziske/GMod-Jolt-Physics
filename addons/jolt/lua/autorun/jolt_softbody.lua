@@ -21,6 +21,7 @@ if SERVER then
 	JoltSoftBodies.Editing = include("jolt_softbody/editing.lua")
 	JoltSoftBodies.Attachments = include("jolt_softbody/attachments.lua")
 	JoltSoftBodies.Tearing = include("jolt_softbody/tearing.lua")
+	JoltSoftBodies.Feedback = include("jolt_softbody/feedback.lua")
 else
 	JoltSoftBodies.Collision = include("jolt_softbody/collision.lua")
 	JoltSoftBodies.Renderer = include("jolt_softbody/renderer.lua")

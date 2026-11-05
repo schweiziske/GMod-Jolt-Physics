@@ -9,12 +9,14 @@ TOOL.ClientConVar = {
 	maxvelocity = "2000", gravity = "1",
 	material = "1", tearing = "0", tearstrain = "60", dihedral = "0",
 	plasticyield = "0.05", plasticcreep = "0", plasticstrain = "0.6",
+	feedback = "1", impactbreak = "0", impactthreshold = "80", toughness = "1",
 }
 TOOL.Information = {
 	{name = "left", stage = 0}, {name = "left_1", stage = 1},
 	{name = "right", stage = 1}, {name = "reload", stage = 1},
 	{name = "mount", stage = 2}, {name = "unmount", stage = 2}, {name = "reload", stage = 2},
 	{name = "cut", stage = 3},
+	{name = "inflate", stage = 4}, {name = "deflate", stage = 4},
 }
 
 if CLIENT then
@@ -36,6 +38,8 @@ if CLIENT then
 	I.RegisterAlias("tool.jolt_softbody.mount", "jolt.mount_help")
 	I.RegisterAlias("tool.jolt_softbody.unmount", "jolt.unmount_help")
 	I.RegisterAlias("tool.jolt_softbody.cut", "jolt.cut_help")
+	I.RegisterAlias("tool.jolt_softbody.inflate", "jolt.inflate_help")
+	I.RegisterAlias("tool.jolt_softbody.deflate", "jolt.deflate_help")
 	I.RegisterAlias("Cleanup_jolt_softbodies", "jolt.jolt_soft_body")
 	I.RegisterAlias("Cleaned_jolt_softbodies", "jolt.jolt_soft_bodies_cleaned_up")
 	I.RegisterAlias("SBoxLimit_jolt_softbodies", "jolt.soft_body_limit_reached")
@@ -71,7 +75,7 @@ function TOOL:Think()
 	local api = JoltSoftBodies
 	if not api then return end
 	if SERVER then
-		self:SetStage(({edit = 1, attach = 2, cut = 3})[self:GetClientInfo("mode")] or 0)
+		self:SetStage(({edit = 1, attach = 2, cut = 3, pressure = 4})[self:GetClientInfo("mode")] or 0)
 		-- Read button edges here so held drags also end when aiming off the mesh.
 		api.Editing.Input(self)
 	else
