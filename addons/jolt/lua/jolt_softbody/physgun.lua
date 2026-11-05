@@ -4,8 +4,9 @@ local physgun = {}
 local inputs = setmetatable({}, {__mode = "k"})
 
 -- Soft bodies have no rigid IPhysicsObject for the engine grab controller.
--- Intercept only gestures that begin on their actual mesh, before weapon attack
--- handling. All ordinary physgun gestures keep their original buttons.
+-- Intercept server weapon attacks only for gestures that begin on the mesh.
+-- Clients must preserve CUserCmd buttons so the server receives grab/release.
+-- All ordinary physgun gestures keep their original buttons.
 hook.Add("StartCommand", "JoltSoftBodyPhysgun", function(owner, command)
 	if CLIENT and owner ~= LocalPlayer() then return end
 	local state = inputs[owner]
@@ -25,9 +26,10 @@ hook.Add("StartCommand", "JoltSoftBodyPhysgun", function(owner, command)
 		if SERVER and state.captured then api.Editing.BeginPhysgun(owner, direction) end
 	end
 	if SERVER then api.Editing.PhysgunInput(owner, left, command:GetMouseWheel(), right) end
-	-- Consume the whole captured gesture, even after a rejection/freeze/deletion.
+	-- Consume the whole captured gesture on the server, even after rejection,
+	-- freeze or deletion. Client StartCommand runs before command transmission.
 	-- Otherwise a held button could unexpectedly grab or freeze a prop behind it.
-	if state.captured then
+	if SERVER and state.captured then
 		command:RemoveKey(IN_ATTACK)
 		command:RemoveKey(IN_ATTACK2)
 		command:RemoveKey(IN_RELOAD)
