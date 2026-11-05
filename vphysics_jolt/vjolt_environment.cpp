@@ -1377,18 +1377,22 @@ void JoltPhysicsEnvironment::Simulate( float deltaTime )
 		VJoltSoftBodyBeforeSimulation( this );
 		VJoltConstraintsBeforeSimulation( this );
 		VJoltPathBeforeSimulation( this );
-		VJoltGravityBeforeSimulation( this );
 		m_ConstraintWakePropagator.Propagate( m_PhysicsSystem );
 	};
 
 	auto updatePhysics = [ & ]( float flUpdateTime, int nSubSteps )
 	{
+		const auto updateBegin = bCaptureStats
+			? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+		VJoltSoftBodySolveAttachments( this, flUpdateTime );
+		// Jolt clears accumulated forces after each Update. Gravity overrides
+		// and fields must therefore be reapplied for every backend update,
+		// including bodies that have just been woken by an attachment.
+		VJoltGravityBeforeSimulation( this );
 		// Keep the previous completed manifold frame visible while Source-side controllers run.
 		// Contact callbacks fill a separate frame during Update; only publish it after all Jolt
 		// worker jobs have completed.
 		m_ContactListener.BeginFrictionContactFrame( flUpdateTime );
-		const auto updateBegin = bCaptureStats
-			? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
 		m_pContactCallbackJobs = callbackJobs ? &*callbackJobs : nullptr;
 		m_ContactListener.SetContactResponseBatches( synchronousContacts && syncMode == 1
 			&& m_ContactListener.GetGameListener() != nullptr );

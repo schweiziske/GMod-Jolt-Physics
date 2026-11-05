@@ -17,6 +17,7 @@ function attachments.Detach(record, vertex)
 	if not mount then return false end
 	record.mounts[vertex] = nil
 	if record.body:IsValid() then
+		if mount.native then record.body:DetachVertex(vertex) end
 		record.body:SetVertexVelocity(vertex, zero)
 		record.body:SetVertexPinned(vertex, mount.wasPinned)
 		record.forceSample = true
@@ -67,10 +68,20 @@ function attachments.Click(owner)
 	if count >= 64 and not record.mounts[vertex] then return gameplay.Fail(owner, I.Phrase("jolt.mount_limit")) end
 	local wasPinned = record.mounts[vertex] and record.mounts[vertex].wasPinned
 	if wasPinned == nil then wasPinned = point.pinned end
-	if not record.body:SetVertexPinned(vertex, true) then return end
 	local position = trace.HitPos + trace.HitNormal * math.max(0.5, record.settings.vertexRadius or 0.5)
+	if trace.HitWorld then
+		local previous = record.mounts[vertex]
+		if previous and previous.native then record.body:DetachVertex(vertex) end
+		if not record.body:SetVertexPinned(vertex, true) then return end
+	else
+		if not record.body.AttachVertex then return gameplay.Fail(owner, I.Phrase("jolt.softbody_update_native")) end
+		if not record.body:AttachVertex(vertex, physics, position) then
+			return gameplay.Fail(owner, I.Phrase("jolt.mount_target_invalid"))
+		end
+	end
 	record.mounts[vertex] = {
 		owner = owner, target = target, physics = physics, world = trace.HitWorld,
+		native = not trace.HitWorld,
 		position = trace.HitWorld and position or physics:WorldToLocal(position),
 		wasPinned = wasPinned, point = point, velocity = Vector(), nextPermission = 0, undoToken = {},
 	}
@@ -132,6 +143,9 @@ local function move(record, vertex, mount, now)
 			or not allowed(mount.owner, record.entity, {Entity = record.entity, Hit = true, HitPos = target}) then return false end
 		mount.nextPermission = now + 0.5
 	end
+	-- Prop joints exchange impulses at each native physics step; Lua only
+	-- checks permissions/lifetime. Never overwrite their simulated velocity.
+	if mount.native then return record.body:IsVertexAttached(vertex) end
 	local point = mount.point
 	if not record.body:ReadVertex(vertex, point) then return false end
 	local velocity = (target - Vector(point.x, point.y, point.z)) / engine.TickInterval()

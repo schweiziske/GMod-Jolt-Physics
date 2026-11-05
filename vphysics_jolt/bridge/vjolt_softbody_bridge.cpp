@@ -5,6 +5,8 @@
 #include "vjolt_environment.h"
 #include "vjolt_interface.h"
 #include "vjolt_layers.h"
+#include "vjolt_object.h"
+#include <vjolt/softbody_attachment.h>
 #include <vjolt/softbody_fragment.h>
 #include <vjolt/softbody_impact.h>
 #include <Jolt/Physics/SoftBody/SoftBodyContactListener.h>
@@ -22,6 +24,7 @@
 
 #include "tier0/memdbgon.h"
 
+
 namespace
 {
 using namespace VJoltSoftBody;
@@ -36,6 +39,16 @@ float WrapBendAngle( float angle )
 
 struct SoftBodyRecord
 {
+	struct Attachment
+	{
+		JPH::BodyID target;
+		JPH::Vec3 localPoint;
+		bool wasPinned;
+		JPH::Vec3 impulse = JPH::Vec3::sZero();
+	};
+	std::map<uint32_t, Attachment> attachments;
+	std::vector<float> attachmentEdgeImpulses;
+	float attachmentDeltaTime = 0;
 	JoltPhysicsEnvironment *environment = nullptr;
 	JPH::Body *body = nullptr;
 	PreparedMesh mesh;
@@ -86,6 +99,23 @@ bool IsIdle( const JoltPhysicsEnvironment *environment )
 	return !environment->IsInSimulation() && !environment->IsInContactCallback();
 }
 
+bool SolveAttachmentMass( JPH::Mat44Arg mass, JPH::Vec3Arg rhs, JPH::Vec3 &out )
+{
+	// Extreme lever arms can erase the translational diagonal in float
+	// precision. Scale before taking a determinant and reject ill-conditioned
+	// systems rather than dividing by zero or emitting a non-finite impulse.
+	const float scale = std::max( { mass.GetColumn3( 0 ).GetX(), mass.GetColumn3( 1 ).GetY(), mass.GetColumn3( 2 ).GetZ() } );
+	if ( !( scale >= 1.0e-8f && scale <= 1.0e10f ) ) return false;
+	auto normalized = JPH::Mat44::sIdentity();
+	for ( uint32_t i = 0; i < 3; ++i ) normalized.SetColumn3( i, mass.GetColumn3( i ) / scale );
+	const float determinant = normalized.GetDeterminant3x3();
+	if ( !( determinant > 1.0e-12f ) || !std::isfinite( determinant ) ) return false;
+	const float originalDeterminant = mass.GetDeterminant3x3();
+	if ( !( originalDeterminant > 0 ) || !std::isfinite( originalDeterminant ) ) return false;
+	out = mass.Inversed3x3().Multiply3x3( rhs );
+	return std::isfinite( out.GetX() ) && std::isfinite( out.GetY() ) && std::isfinite( out.GetZ() );
+}
+
 template <typename Value>
 bool IsValidRange( uint32_t first, uint32_t count, size_t size, const Value *output )
 {
@@ -93,7 +123,7 @@ bool IsValidRange( uint32_t first, uint32_t count, size_t size, const Value *out
 }
 
 class SoftBodyBridge final : public IVJoltSoftBodyBridge, public IVJoltSoftBodyTools,
-	public IVJoltSoftBodyFragment, public IVJoltSoftBodyImpact, public JPH::SoftBodyContactListener
+	public IVJoltSoftBodyFragment, public IVJoltSoftBodyImpact, public IVJoltSoftBodyAttachment, public JPH::SoftBodyContactListener
 {
 public:
 	uint32_t GetVersion() const override
@@ -151,7 +181,7 @@ public:
 			}
 			const auto handle = m_NextHandle++;
 			auto *body = record->body;
-			m_Bodies.emplace( handle, std::move( record ) );
+			InsertRecord( handle, std::move( record ) );
 			m_VertexCount += mesh.vertexCount;
 			environment->GetPhysicsSystem()->GetBodyInterfaceNoLock().AddBody(
 				body->GetID(), JPH::EActivation::Activate );
@@ -286,9 +316,20 @@ public:
 			record->body = bodies.CreateSoftBody( creation );
 			if ( !record->body ) return fail( VJoltSoftBodyError::AllocationFailed );
 			for ( uint32_t i = 0; i < count; ++i ) initial[i].mPosition = rest[sources[i]].mPosition;
+			for ( uint32_t i = 0; i < count; ++i )
+			{
+				const auto attachment = parent->attachments.find( sources[i] );
+				if ( attachment != parent->attachments.end() )
+				{
+					auto copy = attachment->second;
+					copy.impulse = JPH::Vec3::sZero();
+					record->attachments.emplace( i, copy );
+				}
+			}
+			if ( !record->attachments.empty() ) record->attachmentEdgeImpulses.resize( record->mesh.settings->mEdgeConstraints.size(), 0 );
 			const auto handle = m_NextHandle++;
 			auto *body = record->body;
-			m_Bodies.emplace( handle, std::move( record ) );
+			InsertRecord( handle, std::move( record ) );
 			m_VertexCount += count;
 			bodies.AddBody( body->GetID(), JPH::EActivation::Activate );
 			if ( error ) *error = VJoltSoftBodyError::None;
@@ -411,7 +452,7 @@ public:
 	bool SetVertexPinned( VJoltSoftBodyHandle handle, uint32_t index, bool pinned ) override
 	{
 		auto *record = FindIdle( handle );
-		if ( !record || index >= record->mesh.inverseMasses.size() )
+		if ( !record || index >= record->mesh.inverseMasses.size() || record->attachments.count( index ) )
 		{
 			return false;
 		}
@@ -423,6 +464,7 @@ public:
 			record->mesh.pinnedCount = pinned ? record->mesh.pinnedCount + 1 : record->mesh.pinnedCount - 1;
 		}
 		vertex.mInvMass = pinned ? 0.0f : record->mesh.inverseMasses[index];
+		record->attachmentDeltaTime = 0;
 		vertex.mVelocity = JPH::Vec3::sZero();
 		motion.CalculateMassAndInertia();
 		record->Wake();
@@ -651,13 +693,195 @@ public:
 		return true;
 	}
 
+	bool AttachVertex( VJoltSoftBodyHandle handle, uint32_t index, IPhysicsObject *target,
+		const VJoltSoftBodyVector &worldPoint ) override
+	{
+		auto *record = FindIdle( handle );
+		if ( !record || index >= record->mesh.inverseMasses.size() || !IsValidVector( worldPoint )
+			|| !target ) return false;
+		// Check membership before dereferencing a pointer supplied by Lua.
+		int objectCount = 0;
+		const auto **objects = record->environment->GetObjectList( &objectCount );
+		bool foundTarget = false;
+		for ( int i = 0; i < objectCount; ++i ) if ( objects[i] == target ) { foundTarget = true; break; }
+		if ( !foundTarget ) return false;
+		auto *object = static_cast<JoltPhysicsObject *>( target );
+		if ( object->GetJoltEnvironment() != record->environment || object->IsTrigger() || object->IsFluid()
+			|| ( object->GetCallbackFlags() & CALLBACK_MARKED_FOR_DELETE ) ) return false;
+		auto *rigid = object->GetBody();
+		if ( !rigid->IsRigidBody() || !rigid->IsInBroadPhase() ) return false;
+		const auto old = record->attachments.find( index );
+		if ( old == record->attachments.end() && record->attachments.size() >= 64 ) return false;
+		auto &vertex = record->Motion().GetVertex( index );
+		const bool wasPinned = old == record->attachments.end() ? vertex.mInvMass == 0 : old->second.wasPinned;
+		const auto point = rigid->GetInverseCenterOfMassTransform() * ToJolt( worldPoint );
+		try
+		{
+			record->attachmentEdgeImpulses.resize( record->mesh.settings->mEdgeConstraints.size(), 0 );
+			record->attachments.insert_or_assign( index, SoftBodyRecord::Attachment{ rigid->GetID(), JPH::Vec3( point ), wasPinned } );
+		}
+		catch ( const std::bad_alloc & ) { return false; }
+		if ( vertex.mInvMass == 0 ) --record->mesh.pinnedCount;
+		record->attachmentDeltaTime = 0;
+		vertex.mInvMass = record->mesh.inverseMasses[index];
+		record->Motion().CalculateMassAndInertia();
+		record->environment->GetPhysicsSystem()->SetSoftBodyContactListener( this );
+		record->Wake();
+		return true;
+	}
+
+	bool DetachVertex( VJoltSoftBodyHandle handle, uint32_t index ) override
+	{
+		auto *record = FindIdle( handle );
+		if ( !record ) return false;
+		const auto found = record->attachments.find( index );
+		if ( found == record->attachments.end() ) return false;
+		const bool pinned = found->second.wasPinned;
+		record->attachments.erase( found );
+		record->attachmentDeltaTime = 0;
+		return SetVertexPinned( handle, index, pinned );
+	}
+
+	bool IsVertexAttached( VJoltSoftBodyHandle handle, uint32_t index ) const override
+	{
+		const auto *record = FindIdle( handle );
+		if ( !record ) return false;
+		const auto found = record->attachments.find( index );
+		return found != record->attachments.end()
+			&& record->environment->GetPhysicsSystem()->GetBodyLockInterfaceNoLock().TryGetBody( found->second.target );
+	}
+
+	void SolveAttachments( JoltPhysicsEnvironment *environment, float dt )
+	{
+		if ( m_Bodies.empty() || !( dt > 0 ) || !std::isfinite( dt ) ) return;
+		auto *system = environment->GetPhysicsSystem();
+		auto &bodies = system->GetBodyInterfaceNoLock();
+		// Implicit, critically damped point spring. K includes both translation
+		// and the rigid body's rotation, so the applied impulses are reciprocal.
+		constexpr float omega = 2.0f * JPH::JPH_PI * 20.0f;
+		constexpr int attachmentPasses = 64;
+		const float beta = dt * omega / ( 2.0f + dt * omega );
+		const float softness = 1.0f / ( dt * omega * ( 2.0f + dt * omega ) );
+		for ( auto &entry : m_Bodies )
+		{
+			auto &record = *entry.second;
+			if ( record.environment != environment || record.retiring || record.attachments.empty() ) continue;
+			const auto &edges = record.mesh.settings->mEdgeConstraints;
+			auto &edgeImpulses = record.attachmentEdgeImpulses;
+			const float warmStart = record.attachmentDeltaTime > 0 ? std::min( dt / record.attachmentDeltaTime, 2.0f ) : 0;
+			for ( int pass = -1; pass < attachmentPasses; ++pass )
+			{
+				for ( auto it = record.attachments.begin(); it != record.attachments.end(); )
+				{
+					auto &anchor = it->second;
+					auto &v = record.Motion().GetVertex( it->first );
+					auto *rigid = system->GetBodyLockInterfaceNoLock().TryGetBody( anchor.target );
+					if ( !rigid || !rigid->IsInBroadPhase() )
+					{
+						if ( anchor.wasPinned && v.mInvMass > 0 ) ++record.mesh.pinnedCount;
+						v.mInvMass = anchor.wasPinned ? 0 : record.mesh.inverseMasses[it->first];
+						v.mVelocity = JPH::Vec3::sZero();
+						it = record.attachments.erase( it );
+						record.Motion().CalculateMassAndInertia();
+						record.Wake();
+						continue;
+					}
+					auto &accumulated = anchor.impulse;
+					const auto target = rigid->GetCenterOfMassTransform() * anchor.localPoint;
+					const auto position = record.body->GetCenterOfMassTransform() * v.mPosition;
+					const auto r = JPH::Vec3( target - rigid->GetCenterOfMassPosition() );
+					const float rigidMass = rigid->IsDynamic() ? rigid->GetMotionProperties()->GetInverseMass() : 0;
+					const auto inertia = rigid->IsDynamic() ? rigid->GetInverseInertia() : JPH::Mat44::sZero();
+					const float gamma = softness * ( 1.0f / record.mesh.totalMass + rigidMass );
+					auto k = JPH::Mat44::sScale( v.mInvMass + rigidMass + gamma );
+					for ( uint32_t axis = 0; axis < 3; ++axis )
+					{
+						const JPH::Vec3 unit( axis == 0 ? 1.0f : 0.0f, axis == 1 ? 1.0f : 0.0f, axis == 2 ? 1.0f : 0.0f );
+						k.SetColumn3( axis, k.GetColumn3( axis ) + inertia.Multiply3x3( r.Cross( unit ) ).Cross( r ) );
+					}
+					const auto velocity = record.body->GetRotation() * v.mVelocity;
+					auto correction = JPH::Vec3( target - position ) * ( beta / dt );
+					const float maxSpeed = record.Motion().GetMaxLinearVelocity() * 0.5f;
+					const float maxCorrectionSpeed = maxSpeed * 16.0f;
+					if ( correction.LengthSq() > maxCorrectionSpeed * maxCorrectionSpeed ) correction = correction.Normalized() * maxCorrectionSpeed;
+					JPH::Vec3 impulse;
+					if ( !SolveAttachmentMass( k, rigid->GetPointVelocity( target ) - velocity + correction - gamma * accumulated, impulse ) )
+					{
+						if ( anchor.wasPinned && v.mInvMass > 0 ) ++record.mesh.pinnedCount;
+						v.mInvMass = anchor.wasPinned ? 0 : record.mesh.inverseMasses[it->first];
+						v.mVelocity = JPH::Vec3::sZero();
+						it = record.attachments.erase( it );
+						record.attachmentDeltaTime = 0;
+						record.Motion().CalculateMassAndInertia();
+						record.Wake();
+						continue;
+					}
+					++it;
+					if ( pass < 0 ) impulse = accumulated * warmStart;
+					// Limit the whole reciprocal impulse, never just one body's response.
+					const float deltaSpeed = impulse.Length() * ( rigidMass + 1.0f / record.mesh.totalMass );
+					if ( deltaSpeed > maxSpeed ) impulse *= maxSpeed / deltaSpeed;
+					if ( pass < 0 ) accumulated = impulse; else accumulated += impulse;
+					v.mVelocity += record.body->GetRotation().Conjugated() * ( impulse * v.mInvMass );
+					if ( rigid->IsDynamic() )
+					{
+						rigid->AddImpulse( -impulse, target );
+						// External joints are not part of Jolt's rigid-body islands.
+						// Keep both ends awake while exchanging impulses, otherwise a
+						// slowly moving heavy prop can sleep and discard its momentum.
+						if ( pass == attachmentPasses - 1 ) bodies.ActivateBody( rigid->GetID() );
+					}
+					if ( pass == attachmentPasses - 1 ) record.Wake();
+				}
+				// Propagate attachment impulses through the mesh's existing edges.
+				// A deleted last target must not leave an unconnected mesh receiving
+				// cached edge impulses for the remainder of this update.
+				if ( record.attachments.empty() ) break;
+				// This velocity-only pass dissipates relative axial motion; Jolt still
+				// owns position/bend/pressure/collision solving. Without propagation a
+				// heavy box only sees the mass of one tiny surface vertex for a whole PSI.
+				auto &vertices = record.Motion().GetVertices();
+				for ( size_t step = 0; step < edges.size(); ++step )
+				{
+					const size_t i = pass & 1 ? edges.size() - 1 - step : step;
+					const auto &edge = edges[i];
+					auto &a = vertices[edge.mVertex[0]], &b = vertices[edge.mVertex[1]];
+					const auto delta = b.mPosition - a.mPosition;
+					const float length = delta.Length();
+					const float gamma = edge.mCompliance / ( dt * dt );
+					const float denominator = a.mInvMass + b.mInvMass + gamma;
+					if ( length < 1e-6f || denominator < 1e-12f ) continue;
+					const auto direction = delta / length;
+					const float impulse = pass < 0 ? edgeImpulses[i] * warmStart
+						: ( ( b.mVelocity - a.mVelocity ).Dot( direction ) - gamma * edgeImpulses[i] ) / denominator;
+					if ( pass < 0 ) edgeImpulses[i] = impulse; else edgeImpulses[i] += impulse;
+					a.mVelocity += direction * ( impulse * a.mInvMass );
+					b.mVelocity -= direction * ( impulse * b.mInvMass );
+				}
+			}
+			record.attachmentDeltaTime = dt;
+			CaptureImpactVelocities( record );
+		}
+	}
+
+	JPH::SoftBodyValidateResult OnSoftBodyContactValidate( const JPH::Body &body, const JPH::Body &other,
+		JPH::SoftBodyContactSettings & ) override
+	{
+		// Like a no-collide weld: prevent contact response from fighting the
+		// attachment while leaving collision with all other bodies intact.
+		const auto found = m_BodyRecords.find( &body );
+		if ( found != m_BodyRecords.end() )
+			for ( const auto &anchor : found->second->attachments )
+				if ( anchor.second.target == other.GetID() ) return JPH::SoftBodyValidateResult::RejectContact;
+		return JPH::SoftBodyValidateResult::AcceptContact;
+	}
+
 	void OnSoftBodyContactAdded( const JPH::Body &body, const JPH::SoftBodyManifold &manifold ) override
 	{
 		// Topology and the handle map are immutable during Simulate. Jolt updates
 		// a soft body on one worker at a time; each callback writes only its record.
-		SoftBodyRecord *record = nullptr;
-		for ( const auto &entry : m_Bodies )
-			if ( entry.second->body == &body ) { record = entry.second.get(); break; }
+		const auto found = m_BodyRecords.find( &body );
+		SoftBodyRecord *record = found == m_BodyRecords.end() ? nullptr : found->second;
 		if ( !record || record->impactVelocities.empty() ) return;
 		VJoltSoftBodyImpact impact;
 		const auto &vertices = manifold.GetVertices();
@@ -764,6 +988,16 @@ public:
 	}
 
 private:
+	void InsertRecord( VJoltSoftBodyHandle handle, std::unique_ptr<SoftBodyRecord> record )
+	{
+		const auto *body = record->body;
+		// Both indices are changed only outside worker callbacks. Roll back the
+		// non-owning index if allocating the owning map's node fails.
+		m_BodyRecords.emplace( body, record.get() );
+		try { m_Bodies.emplace( handle, std::move( record ) ); }
+		catch ( ... ) { m_BodyRecords.erase( body ); throw; }
+	}
+
 	static void CaptureImpactVelocities( SoftBodyRecord &record )
 	{
 		const auto &vertices = record.Motion().GetVertices();
@@ -827,6 +1061,7 @@ private:
 		if ( iterator != m_Bodies.end() )
 		{
 			m_VertexCount -= static_cast<uint32_t>( iterator->second->mesh.inverseMasses.size() );
+			m_BodyRecords.erase( iterator->second->body );
 			m_Bodies.erase( iterator );
 		}
 	}
@@ -845,6 +1080,7 @@ private:
 	}
 
 	std::unordered_map<VJoltSoftBodyHandle, std::unique_ptr<SoftBodyRecord>> m_Bodies;
+	std::unordered_map<const JPH::Body *, SoftBodyRecord *> m_BodyRecords;
 	VJoltSoftBodyHandle m_NextHandle = 1;
 	uint32_t m_VertexCount = 0;
 };
@@ -863,6 +1099,14 @@ EXPOSE_SINGLE_INTERFACE_GLOBALVAR(
 
 EXPOSE_SINGLE_INTERFACE_GLOBALVAR(
 	SoftBodyBridge, IVJoltSoftBodyImpact, VJOLT_SOFTBODY_IMPACT_VERSION, g_SoftBodyBridge );
+
+EXPOSE_SINGLE_INTERFACE_GLOBALVAR(
+	SoftBodyBridge, IVJoltSoftBodyAttachment, VJOLT_SOFTBODY_ATTACHMENT_VERSION, g_SoftBodyBridge );
+
+void VJoltSoftBodySolveAttachments( JoltPhysicsEnvironment *environment, float deltaTime )
+{
+	g_SoftBodyBridge.SolveAttachments( environment, deltaTime );
+}
 
 void VJoltSoftBodyBeforeSimulation( JoltPhysicsEnvironment *environment )
 {

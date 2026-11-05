@@ -103,6 +103,11 @@ end
 
 function server.SpawnPrepared(owner, settings, position, angles, velocity)
 	if not IsValid(owner) or not owner:Alive() then return end
+	-- The foil preset's angular bending can make tubular rope meshes diverge.
+	-- Check the actual bend mode too, since custom presets can retain it.
+	if settings.kind == 3 and (settings.material == 5 or settings.dihedral == true) then
+		return nil, I.Phrase("jolt.softbody_rope_foil_disabled")
+	end
 	local mesh = geometry.Generate(settings)
 	local count = mesh.vertexCount
 	local owned = 0

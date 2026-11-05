@@ -4,6 +4,7 @@
 #include <vjolt/softbody_tools.h>
 #include <vjolt/softbody_fragment.h>
 #include <vjolt/softbody_impact.h>
+#include <vjolt/softbody_attachment.h>
 
 #include <algorithm>
 #include <array>
@@ -21,6 +22,7 @@ IVJoltSoftBodyBridge *g_Bridge = nullptr;
 IVJoltSoftBodyTools *g_Tools = nullptr;
 IVJoltSoftBodyFragment *g_Fragment = nullptr;
 IVJoltSoftBodyImpact *g_Impact = nullptr;
+IVJoltSoftBodyAttachment *g_Attachment = nullptr;
 int g_SoftBodyMeta = 0;
 std::unordered_set<VJoltSoftBodyHandle> g_OwnedBodies;
 
@@ -356,6 +358,30 @@ LUA_FUNCTION_STATIC( SetVertexPinned )
 			&& g_Bridge->SetVertexPinned( ReadHandle( LUA ), vertex - 1, LUA->GetBool( 3 ) ) );
 }
 
+LUA_FUNCTION_STATIC( AttachVertex )
+{
+	uint32_t vertex;
+	VJoltSoftBodyVector point;
+	return PushResult( LUA, g_Attachment && ReadInteger( LUA, 2, 1, kVJoltSoftBodyMaxVertices, vertex )
+		&& LUA->IsType( 3, Type::PhysObj ) && ReadVector( LUA, 4, point )
+		&& g_Attachment->AttachVertex( ReadHandle( LUA ), vertex - 1, LUA->GetUserType<IPhysicsObject>( 3, Type::PhysObj ), point ) );
+}
+
+LUA_FUNCTION_STATIC( DetachVertex )
+{
+	uint32_t vertex;
+	return PushResult( LUA, g_Attachment && ReadInteger( LUA, 2, 1, kVJoltSoftBodyMaxVertices, vertex )
+		&& g_Attachment->DetachVertex( ReadHandle( LUA ), vertex - 1 ) );
+}
+
+LUA_FUNCTION_STATIC( IsVertexAttached )
+{
+	uint32_t vertex;
+	LUA->PushBool( g_Attachment && ReadInteger( LUA, 2, 1, kVJoltSoftBodyMaxVertices, vertex )
+		&& g_Attachment->IsVertexAttached( ReadHandle( LUA ), vertex - 1 ) );
+	return 1;
+}
+
 LUA_FUNCTION_STATIC( SetVertexVelocity )
 {
 	uint32_t vertex;
@@ -485,6 +511,8 @@ GMOD_MODULE_OPEN()
 	if ( g_Fragment && g_Fragment->GetVersion() != kVJoltSoftBodyFragmentVersion ) g_Fragment = nullptr;
 	g_Impact = VJoltSDK::QueryInterface<IVJoltSoftBodyImpact>( discovery.module, VJOLT_SOFTBODY_IMPACT_VERSION );
 	if ( g_Impact && g_Impact->GetVersion() != kVJoltSoftBodyImpactVersion ) g_Impact = nullptr;
+	g_Attachment = VJoltSDK::QueryInterface<IVJoltSoftBodyAttachment>( discovery.module, VJOLT_SOFTBODY_ATTACHMENT_VERSION );
+	if ( g_Attachment && g_Attachment->GetVersion() != kVJoltSoftBodyAttachmentVersion ) g_Attachment = nullptr;
 	LUA->Push( -1 );
 	LUA->SetField( -2, "__index" );
 	RegisterFunction( LUA, "__gc", Destroy );
@@ -506,6 +534,12 @@ GMOD_MODULE_OPEN()
 	RegisterFunction( LUA, "Wake", Wake );
 	RegisterFunction( LUA, "GetHandle", GetHandle );
 	if ( g_Fragment ) RegisterFunction( LUA, "CreateFragment", CreateFragment );
+	if ( g_Attachment )
+	{
+		RegisterFunction( LUA, "AttachVertex", AttachVertex );
+		RegisterFunction( LUA, "DetachVertex", DetachVertex );
+		RegisterFunction( LUA, "IsVertexAttached", IsVertexAttached );
+	}
 	if ( g_Impact )
 	{
 		RegisterFunction( LUA, "SetImpactTracking", SetImpactTracking );
@@ -545,5 +579,6 @@ GMOD_MODULE_CLOSE()
 	g_Tools = nullptr;
 	g_Fragment = nullptr;
 	g_Impact = nullptr;
+	g_Attachment = nullptr;
 	return 0;
 }

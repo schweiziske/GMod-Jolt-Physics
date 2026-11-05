@@ -237,6 +237,14 @@ A yield of 0.04 is 4% edge strain, or 7.2° with dihedral bending. Results depen
 
 ## Interaction and limits
 
+### Two-way prop attachments
+
+With `VJoltSoftBodyAttachment001`, `body:AttachVertex(vertex, physobj, worldPoint)` connects a vertex to a point on a rigid body. Both bodies exchange impulses, including torque at an offset anchor. `body:IsVertexAttached(vertex)` checks the connection; `body:DetachVertex(vertex)` restores the original pin state. Indices are one-based. The target must belong to the same physics environment. Destroyed targets detach automatically, and fragments inherit their source vertices' attachments.
+
+The workshop's Attachment points mode uses this for props: select a soft-body vertex, then click a box surface. Repeat at the other end for a second box. World attachments stay pinned. RMB detaches and Z undoes a mount. For a freely moving rope, release its creation pins first (physics-gun R) or spawn it without pins.
+
+These are compliant point joints, not rigid welds. Collision between the connected soft body and that prop is suppressed to prevent contact from fighting the joint. Other collisions remain enabled. The integration layer exchanges impulses once per normal physics PSI, with extra velocity iterations limited to attached soft meshes. Attachments do not increase the world's physics update count or change other soft bodies' iteration budgets. Attached bodies remain awake; large or numerous attached meshes still require profiling. The Jolt library source is unchanged.
+
 - Soft bodies collide both ways with rigid bodies and the world, but aren't `IPhysicsObject`s and cannot directly use rigid-body constraints, Source collision callbacks or saves. A body from `Create` has no entity, so Source traces miss it as well; the workshop adds an entity and regular physics-gun vertex grabbing.
 - The player controller's contact queries ignore soft bodies, and vehicle wheels can't rest on them, though a vehicle's chassis still hits them.
 - Soft bodies use world gravity times `gravityFactor`; gravity fields and per-object gravity don't affect them.
