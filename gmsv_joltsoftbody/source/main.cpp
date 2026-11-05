@@ -2,6 +2,7 @@
 #include "lua_snapshot.h"
 #include <vjolt/loader.h>
 #include <vjolt/softbody_tools.h>
+#include <vjolt/softbody_fragment.h>
 
 #include <algorithm>
 #include <array>
@@ -17,6 +18,7 @@ using namespace JoltSoftBodyLua;
 
 IVJoltSoftBodyBridge *g_Bridge = nullptr;
 IVJoltSoftBodyTools *g_Tools = nullptr;
+IVJoltSoftBodyFragment *g_Fragment = nullptr;
 int g_SoftBodyMeta = 0;
 std::unordered_set<VJoltSoftBodyHandle> g_OwnedBodies;
 
@@ -148,6 +150,57 @@ LUA_FUNCTION_STATIC( Create )
 	{
 		return PushFailure( LUA, "unable to allocate soft-body mesh buffers" );
 	}
+}
+
+LUA_FUNCTION_STATIC( CreateFragment )
+{
+	if ( !g_Fragment || !LUA->IsType( 2, Type::Table ) || !LUA->IsType( 3, Type::Table )
+		|| !LUA->IsType( 4, Type::Table ) ) return PushFailure( LUA, "fragment extension or arrays unavailable" );
+	const auto rawCount = LUA->ObjLen( 2 ), rawFaceCount = LUA->ObjLen( 4 );
+	if ( rawCount < 3 || rawCount > kVJoltSoftBodyMaxVertices || LUA->ObjLen( 3 ) != rawCount
+		|| rawFaceCount < 1 || rawFaceCount > kVJoltSoftBodyMaxTriangles ) return PushFailure( LUA, "invalid fragment sizes" );
+	const auto count = static_cast<uint32_t>( rawCount ), faceCount = static_cast<uint32_t>( rawFaceCount );
+	// Trivial fixed buffers remain safe if a Lua allocation longjmps.
+	std::array<uint32_t, kVJoltSoftBodyMaxVertices> sources;
+	std::array<float, kVJoltSoftBodyMaxVertices> fractions;
+	std::array<VJoltSoftBodyTriangle, kVJoltSoftBodyMaxTriangles> triangles;
+	for ( uint32_t i = 0; i < count; ++i )
+	{
+		LUA->PushNumber( i + 1 ); LUA->RawGet( 2 );
+		const bool sourceOK = ReadInteger( LUA, -1, 1, kVJoltSoftBodyMaxVertices, sources[i] );
+		LUA->Pop();
+		LUA->PushNumber( i + 1 ); LUA->RawGet( 3 );
+		const bool fractionOK = ReadNumber( LUA, -1, fractions[i] );
+		LUA->Pop();
+		if ( !sourceOK || !fractionOK ) return PushFailure( LUA, "invalid fragment vertex" );
+		--sources[i];
+	}
+	for ( uint32_t i = 0; i < faceCount; ++i )
+	{
+		LUA->PushNumber( i + 1 ); LUA->RawGet( 4 );
+		if ( !LUA->IsType( -1, Type::Table ) ) return PushFailure( LUA, "invalid fragment face" );
+		for ( uint32_t corner = 0; corner < 3; ++corner )
+		{
+			LUA->PushNumber( corner + 1 ); LUA->RawGet( -2 );
+			const bool valid = ReadInteger( LUA, -1, 1, count, triangles[i].vertices[corner] );
+			LUA->Pop();
+			if ( !valid ) return PushFailure( LUA, "invalid fragment triangle index" );
+			--triangles[i].vertices[corner];
+		}
+		LUA->Pop();
+	}
+	VJoltSoftBodyError error;
+	const auto handle = g_Fragment->CreateFragment( ReadHandle( LUA ), count, sources.data(), fractions.data(),
+		faceCount, triangles.data(), &error );
+	if ( !handle ) return PushFailure( LUA, CreationError( error ) );
+	try { g_OwnedBodies.insert( handle ); }
+	catch ( const std::bad_alloc & )
+	{
+		g_Bridge->Destroy( handle );
+		return PushFailure( LUA, "unable to track fragment" );
+	}
+	LUA->PushUserType_Value( handle, g_SoftBodyMeta );
+	return 1;
 }
 
 LUA_FUNCTION_STATIC( IsValid )
@@ -406,6 +459,8 @@ GMOD_MODULE_OPEN()
 		g_Tools = nullptr;
 	}
 	g_SoftBodyMeta = LUA->CreateMetaTable( "JoltSoftBody" );
+	g_Fragment = VJoltSDK::QueryInterface<IVJoltSoftBodyFragment>( discovery.module, VJOLT_SOFTBODY_FRAGMENT_VERSION );
+	if ( g_Fragment && g_Fragment->GetVersion() != kVJoltSoftBodyFragmentVersion ) g_Fragment = nullptr;
 	LUA->Push( -1 );
 	LUA->SetField( -2, "__index" );
 	RegisterFunction( LUA, "__gc", Destroy );
@@ -426,6 +481,7 @@ GMOD_MODULE_OPEN()
 	RegisterFunction( LUA, "AddVertexImpulse", AddVertexImpulse );
 	RegisterFunction( LUA, "Wake", Wake );
 	RegisterFunction( LUA, "GetHandle", GetHandle );
+	if ( g_Fragment ) RegisterFunction( LUA, "CreateFragment", CreateFragment );
 	if ( g_Tools )
 	{
 		RegisterFunction( LUA, "Trace", Trace );
@@ -458,5 +514,6 @@ GMOD_MODULE_CLOSE()
 	g_OwnedBodies.clear();
 	g_Bridge = nullptr;
 	g_Tools = nullptr;
+	g_Fragment = nullptr;
 	return 0;
 }

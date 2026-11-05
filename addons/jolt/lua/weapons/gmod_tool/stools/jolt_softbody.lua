@@ -5,12 +5,16 @@ TOOL.RequiresTraceHit = false
 TOOL.ClientConVar = {
 	mode = "create", kind = "1", quality = "2", width = "160", height = "128", mass = "4",
 	softness = "40", inflation = "45", pins = "1", palette = "1", rotation = "0", playercollision = "0",
-	bodyiterations = "5", bodydamping = "0.35", bodyfriction = "0.6", bodyrestitution = "0.05", vertexradius = "0.5",
+	bodyiterations = "10", bodydamping = "0.35", bodyfriction = "0.6", bodyrestitution = "0.05", vertexradius = "0.5",
 	maxvelocity = "2000", gravity = "1",
+	material = "1", tearing = "0", tearstrain = "60", dihedral = "0",
+	plasticyield = "0.05", plasticcreep = "0", plasticstrain = "0.6",
 }
 TOOL.Information = {
 	{name = "left", stage = 0}, {name = "left_1", stage = 1},
 	{name = "right", stage = 1}, {name = "reload", stage = 1},
+	{name = "mount", stage = 2}, {name = "unmount", stage = 2}, {name = "reload", stage = 2},
+	{name = "cut", stage = 3},
 }
 
 if CLIENT then
@@ -29,6 +33,9 @@ if CLIENT then
 	I.RegisterAlias("tool.jolt_softbody.left_1", "jolt.hold_to_drag_a_vertex_release_to_restore_its_original_pin_state")
 	I.RegisterAlias("tool.jolt_softbody.right", "jolt.toggle_selected_vertex_s_pin_state")
 	I.RegisterAlias("tool.jolt_softbody.reload", "jolt.finish_dragging")
+	I.RegisterAlias("tool.jolt_softbody.mount", "jolt.mount_help")
+	I.RegisterAlias("tool.jolt_softbody.unmount", "jolt.unmount_help")
+	I.RegisterAlias("tool.jolt_softbody.cut", "jolt.cut_help")
 	I.RegisterAlias("Cleanup_jolt_softbodies", "jolt.jolt_soft_body")
 	I.RegisterAlias("Cleaned_jolt_softbodies", "jolt.jolt_soft_bodies_cleaned_up")
 	I.RegisterAlias("SBoxLimit_jolt_softbodies", "jolt.soft_body_limit_reached")
@@ -37,7 +44,7 @@ end
 local gameplay = SERVER and include("jolt_gameplay/server.lua")
 
 function TOOL:LeftClick(trace)
-	if self:GetClientInfo("mode") == "edit" then return true end
+	if self:GetClientInfo("mode") ~= "create" then return true end
 	local owner, api = self:GetOwner(), JoltSoftBodies
 	if not api or not trace.Hit or trace.HitSky
 		or owner:GetShootPos():DistToSqr(trace.HitPos) > api.Config.EditDistance ^ 2 then return false end
@@ -57,14 +64,14 @@ function TOOL:LeftClick(trace)
 end
 
 function TOOL:RightClick()
-	return self:GetClientInfo("mode") == "edit"
+	return self:GetClientInfo("mode") ~= "create"
 end
 
 function TOOL:Think()
 	local api = JoltSoftBodies
 	if not api then return end
 	if SERVER then
-		self:SetStage(self:GetClientInfo("mode") == "edit" and 1 or 0)
+		self:SetStage(({edit = 1, attach = 2, cut = 3})[self:GetClientInfo("mode")] or 0)
 		-- Read button edges here so held drags also end when aiming off the mesh.
 		api.Editing.Input(self)
 	else
@@ -74,11 +81,13 @@ end
 
 function TOOL:Reload()
 	if SERVER and JoltSoftBodies then JoltSoftBodies.Editing.Release(self:GetOwner()) end
+	if SERVER and JoltSoftBodies and JoltSoftBodies.Attachments then JoltSoftBodies.Attachments.Cancel(self:GetOwner()) end
 	return true
 end
 
 function TOOL:Holster()
 	if SERVER and JoltSoftBodies then JoltSoftBodies.Editing.Release(self:GetOwner()) end
+	if SERVER and JoltSoftBodies and JoltSoftBodies.Attachments then JoltSoftBodies.Attachments.Cancel(self:GetOwner()) end
 	return true
 end
 

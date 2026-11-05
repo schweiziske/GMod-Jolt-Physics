@@ -141,7 +141,7 @@ bool HasTriangleArea( const JPH::Vec3 &first, const JPH::Vec3 &second, const JPH
 } // namespace
 
 VJoltSoftBodyError PrepareMesh(
-	const VJoltSoftBodyMesh &mesh, const VJoltSoftBodySettings &settings, PreparedMesh &prepared )
+	const VJoltSoftBodyMesh &mesh, const VJoltSoftBodySettings &settings, PreparedMesh &prepared, bool fragment )
 {
 	if ( mesh.size != sizeof( mesh ) || !mesh.vertices || !mesh.triangles || mesh.vertexCount < 3
 		|| mesh.triangleCount == 0 )
@@ -160,7 +160,7 @@ VJoltSoftBodyError PrepareMesh(
 	for ( uint32_t index = 0; index < mesh.vertexCount; ++index )
 	{
 		const auto &vertex = mesh.vertices[index];
-		if ( !IsValidVector( vertex.position ) || !IsFiniteWithin( vertex.mass, 0.001f, 10000.0f )
+		if ( !IsValidVector( vertex.position ) || !IsFiniteWithin( vertex.mass, fragment ? 0.000001f : 0.001f, 10000.0f )
 			|| vertex.pinned > 1 )
 		{
 			return VJoltSoftBodyError::InvalidVertex;

@@ -97,29 +97,37 @@ function protocol.WriteMeta(record)
 	writeUInt(config.Protocol, 8)
 	writeUInt(record.id, 32)
 	writeUInt(record.entity:EntIndex(), 16)
-	writeUInt(settings.kind, 2)
+	writeUInt(settings.kind, 3)
 	writeUInt(settings.quality, 2)
 	writeFloat(settings.width)
 	writeFloat(settings.height)
 	writeUInt(settings.palette, 3)
 	writeUInt(settings.pins, 2)
 	writeBool(settings.playerCollision == true)
+	writeUInt(settings.rowFrom or 0, 7)
+	writeUInt(settings.rowTo or config.Rows(settings.kind, settings.quality), 7)
+	writeUInt(settings.material or 1, 3)
 end
 
 function protocol.ReadMeta(bits)
-	if bits < 130 or bits >= 138 or readUInt(8) ~= config.Protocol then return end
-	local id, entityIndex, kind, quality = readUInt(32), readUInt(16), readUInt(2), readUInt(2)
+	if bits < 148 or bits >= 156 or readUInt(8) ~= config.Protocol then return end
+	local id, entityIndex, kind, quality = readUInt(32), readUInt(16), readUInt(3), readUInt(2)
 	local width, height, palette, pins, playerCollision = readFloat(), readFloat(), readUInt(3), readUInt(2), readBool()
-	if id == 0 or id > 2147483647 or entityIndex == 0 or kind < 1 or kind > 2 or quality < 1 or quality > 3
-		or not config.IsFinite(width) or width < 32 or width > 512
-		or not config.IsFinite(height) or height < 32 or height > 512
+	local rowFrom, rowTo, material = readUInt(7), readUInt(7), readUInt(3)
+	if id == 0 or id > 2147483647 or entityIndex == 0 or kind < 1 or kind > 4 or quality < 1 or quality > 3
+		or not config.IsFinite(width) or width < 2 or width > 512
+		or not config.IsFinite(height) or height < 32 or height > 1024
+		or material < 1 or material > #config.Materials
 		or palette < 1 or palette > #config.Palette or pins > 2 then return end
+	if kind == 2 then
+		if rowFrom ~= 0 or rowTo ~= 0 then return end
+	elseif rowFrom >= rowTo or rowTo > config.Rows(kind, quality) then return end
 	return id, entityIndex, {kind = kind, quality = quality, width = width, height = height, palette = palette, pins = pins,
-		playerCollision = playerCollision}
+		playerCollision = playerCollision, rowFrom = rowFrom, rowTo = rowTo, material = material}
 end
 
 function protocol.MetaBytes(record)
-	return 18
+	return 19
 end
 
 return protocol

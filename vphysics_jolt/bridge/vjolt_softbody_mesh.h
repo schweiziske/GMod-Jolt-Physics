@@ -24,5 +24,5 @@ JPH::Vec3 ToJolt( const VJoltSoftBodyVector &value );
 VJoltSoftBodyVector ToSource( JPH::Vec3Arg value );
 bool ValidateSettings( const VJoltSoftBodySettings &settings );
 VJoltSoftBodyError PrepareMesh(
-	const VJoltSoftBodyMesh &mesh, const VJoltSoftBodySettings &settings, PreparedMesh &prepared );
+	const VJoltSoftBodyMesh &mesh, const VJoltSoftBodySettings &settings, PreparedMesh &prepared, bool fragment = false );
 } // namespace VJoltSoftBody

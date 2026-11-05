@@ -33,7 +33,7 @@ In **Edit vertices** mode:
 | Right click | Pin or unpin the selected vertex (pins are fixed in the world) |
 | R | Finish dragging |
 
-The regular physics gun can't grab soft bodies; edit them with the workshop. See the [soft-body guide](../gmsv_joltsoftbody/README.md) for details.
+The regular physics gun can also grab soft bodies: hold left click to drag a vertex near the hit point, scroll to adjust distance, release to restore its original pin state, or right-click while holding to pin it. Unpin with the workshop's right-click action. See the [soft-body guide](../gmsv_joltsoftbody/README.md) for details.
 
 ## Black holes
 

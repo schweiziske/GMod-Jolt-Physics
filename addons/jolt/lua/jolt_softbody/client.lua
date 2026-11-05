@@ -120,7 +120,16 @@ local function think()
 		local record = client.Order[index]
 		local latest = record.buffer:Latest()
 		if bind(record, now) and latest then
-			local changed, settled = record.buffer:Play(playbackAt)
+			local holding = owner:GetNW2Bool("jolt_softbody_physgun", false)
+				and owner:GetNW2Int("jolt_softbody_drag_id", 0) == record.id
+			local changed, settled
+			if holding then
+				-- Show the latest authoritative mesh while holding, without adding
+				-- the normal spectator interpolation delay to the user's input.
+				changed, settled = record.buffer:Sample(latest.time)
+			else
+				changed, settled = record.buffer:Play(playbackAt)
+			end
 			record.settled = settled
 			if changed then
 				renderer.UpdateBounds(record.render, record.buffer.display)
@@ -145,6 +154,7 @@ local function think()
 end
 
 function api.Shutdown()
+	if api.Physgun then api.Physgun.Shutdown() end
 	if api.ToolClient then api.ToolClient.Shutdown() end
 	for index = #client.Order, 1, -1 do client.Remove(client.Order[index].id) end
 	hook.Remove("Think", "JoltSoftBodies")

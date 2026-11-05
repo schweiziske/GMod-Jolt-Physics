@@ -81,7 +81,12 @@ local function schedulePeer(peer, now)
 				protocol.WriteMeta(record)
 				net.Send(peer.player)
 			end
-			entry.known, entry.sequence, entry.nextSend = true, record.sequence, now + entry.interval
+			local drag = api.Editing and api.Editing.Drags[peer.player]
+			local holding = drag and drag.physgun and drag.record == record
+			-- Prioritize responsiveness for the holder without bypassing the existing
+			-- per-player bandwidth budget or changing other viewers' update rates.
+			local interval = holding and math.min(entry.interval, 1 / 60) or entry.interval
+			entry.known, entry.sequence, entry.nextSend = true, record.sequence, now + interval
 			peer.tokens = peer.tokens - cost
 			peer.cursor = index % count + 1
 		end

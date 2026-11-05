@@ -25,30 +25,65 @@ local function appendTriangle(mesh, first, second, third, shade)
 end
 
 local function cloth(mesh, settings)
-	local resolution = config.ClothResolution[settings.quality]
-	local last = resolution - 1
-	for row = 0, last do
+	local resolution = config.Columns(settings.kind, settings.quality)
+	local last, rows = resolution - 1, config.Rows(settings.kind, settings.quality)
+	local firstRow, lastRow = settings.rowFrom or 0, settings.rowTo or rows
+	local round = settings.kind == 3
+	mesh.columns, mesh.rowFrom, mesh.rowTo = resolution, firstRow, lastRow
+	for row = firstRow, lastRow do
 		for column = 0, last do
-			local index = appendVertex(mesh,
-				(column / last - 0.5) * settings.width, 0, (0.5 - row / last) * settings.height)
+			local angle = column / resolution * 2 * pi
+			local x = round and math.cos(angle) * settings.width * 0.5 or (column / last - 0.5) * settings.width
+			local y = round and math.sin(angle) * settings.width * 0.5 or 0
+			local index = appendVertex(mesh, x, y, (0.5 - row / rows) * settings.height)
 			mesh.pinned[index] = row == 0 and (settings.pins == 2
 				or settings.pins == 1 and (column == 0 or column == last))
 		end
 	end
-	for row = 0, last - 1 do
-		for column = 0, last - 1 do
-			local first = row * resolution + column + 1
+	for row = firstRow, lastRow - 1 do
+		for column = 0, round and last or last - 1 do
+			local first = (row - firstRow) * resolution + column + 1
 			local below = first + resolution
+			local nextColumn = (row - firstRow) * resolution + (column + 1) % resolution + 1
 			local shade = (math.floor(row / 2) + math.floor(column / 2)) % 2 == 0 and 1 or 0.88
-			appendTriangle(mesh, first, first + 1, below, shade)
-			appendTriangle(mesh, first + 1, below + 1, below, shade)
+			if round then
+				appendTriangle(mesh, first, below, nextColumn, shade)
+				appendTriangle(mesh, nextColumn, below, nextColumn + resolution, shade)
+			else
+				appendTriangle(mesh, first, nextColumn, below, shade)
+				appendTriangle(mesh, nextColumn, nextColumn + resolution, below, shade)
+			end
 		end
 	end
 	for corner = 1, #mesh.indices do
 		local index = mesh.indices[corner] - 1
-		mesh.u[corner] = (index % resolution) / last
-		mesh.v[corner] = math.floor(index / resolution) / last
+		mesh.u[corner] = (index % resolution) / (round and resolution or last)
+		mesh.v[corner] = (math.floor(index / resolution) + firstRow) / rows
 	end
+end
+
+-- A seam is an interior vertex row. Both children retain that row, sharing
+-- its mass equally but no constraints; topology stays reproducible from meta.
+function geometry.Split(settings, seam)
+	if settings.kind == 2 then return end
+	local first, last = settings.rowFrom or 0, settings.rowTo or config.Rows(settings.kind, settings.quality)
+	if seam ~= math.floor(seam) or seam <= first or seam >= last then return end
+	local pieces = {}
+	for part = 1, 2 do
+		local child = {}
+		for key, value in pairs(settings) do child[key] = value end
+		child.rowFrom, child.rowTo = part == 1 and first or seam, part == 1 and seam or last
+		local mesh = geometry.Generate(child)
+		local sources, fractions, triangles = {}, {}, {}
+		for i = 1, mesh.vertexCount do
+			local row = math.floor((i - 1) / mesh.columns) + child.rowFrom
+			sources[i] = i + (child.rowFrom - first) * mesh.columns
+			fractions[i] = row == seam and 0.5 or 1
+		end
+		for i = 1, #mesh.indices, 3 do triangles[#triangles + 1] = {mesh.indices[i], mesh.indices[i + 1], mesh.indices[i + 2]} end
+		pieces[part] = {settings = child, mesh = mesh, sources = sources, fractions = fractions, triangles = triangles}
+	end
+	return pieces
 end
 
 local function sphereVertex(mesh, x, y, z, radius)

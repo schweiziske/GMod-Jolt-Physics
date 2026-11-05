@@ -5,6 +5,7 @@ local sharedFiles = {"config", "geometry", "buffer", "protocol"}
 local clientFiles = {"collision_tree", "collision", "renderer", "client", "tool_client", "panel", "options"}
 if SERVER then
 	AddCSLuaFile()
+	AddCSLuaFile("jolt_softbody/physgun.lua")
 	for _, name in ipairs(sharedFiles) do AddCSLuaFile("jolt_softbody/" .. name .. ".lua") end
 	for _, name in ipairs(clientFiles) do AddCSLuaFile("jolt_softbody/" .. name .. ".lua") end
 end
@@ -18,6 +19,8 @@ if SERVER then
 	JoltSoftBodies.Server = include("jolt_softbody/server.lua")
 	JoltSoftBodies.Replication = include("jolt_softbody/replication.lua")
 	JoltSoftBodies.Editing = include("jolt_softbody/editing.lua")
+	JoltSoftBodies.Attachments = include("jolt_softbody/attachments.lua")
+	JoltSoftBodies.Tearing = include("jolt_softbody/tearing.lua")
 else
 	JoltSoftBodies.Collision = include("jolt_softbody/collision.lua")
 	JoltSoftBodies.Renderer = include("jolt_softbody/renderer.lua")
@@ -25,3 +28,5 @@ else
 	JoltSoftBodies.ToolClient = include("jolt_softbody/tool_client.lua")
 	JoltSoftBodies.Options = include("jolt_softbody/options.lua")
 end
+
+JoltSoftBodies.Physgun = include("jolt_softbody/physgun.lua")

@@ -6,6 +6,17 @@ The Soft Body Workshop places cloth and inflatable soft balls in Sandbox, and th
 
 ## Soft Body Workshop
 
+### Building, attachments and tearing
+
+- **Soft rope / fabric strap**: select either new shape. Width controls diameter or strap width; height controls strand length. Top pins allow hanging structures.
+- **Attachment points**: click a soft-body vertex, then a world or prop surface. Prop attachments retain physics-bone local coordinates and follow translation and rotation. RMB detaches; R cancels selection. Removing the target or revoking permission restores the original pin state. Physgun pickup detaches a mounted vertex first.
+- **Cut / tear**: LMB cuts the highlighted cross-section of cloth, rope or strap. Balls cannot be cut. Optional automatic tearing requires overstretch in two consecutive samples; the threshold is extra length relative to the initial mesh.
+- **Material presets**: fabric, rubber, foam and foil fill the softness, damping, friction, bending and plasticity controls, which remain editable. Elastic materials recover; plastic materials can retain changes in constraint rest lengths or angles.
+
+A cut produces two independent bodies, preserving current positions, velocities, pins, attachments and rest geometry. Duplicated seam vertices receive half their original mass each. Failure to allocate either fragment keeps the original. Fragments count toward player/server quotas, including the default three-body player limit, and an original body can produce at most eight pieces. Undoing the original spawn removes every surviving piece.
+
+Attachments drive vertices to follow props; they do not apply rope tension back to props. Creation settings affect new bodies. Tearing requires matching updated backend and soft-body DLLs. The optional `VJoltSoftBodyFragment001` extension preserves the original `VJoltSoftBody001` ABI. Lua `body:CreateFragment(sourceIndices, massFractions, triangles)` uses one-based indices and leaves the parent alive for caller-managed commit or rollback.
+
 Open **Q → Tools → Jolt → Soft Body Workshop** and pick a mode in the panel.
 
 **Create soft body**: choose cloth or a soft ball and set its size, mesh quality, total mass (default 4 kg, shared by all vertices), softness, inflation (balls), pins (cloth: none, top corners or the entire top edge), color, rotation and player collision. The solver settings below them are capped by the server settings. The panel shows the vertex and triangle count and the bandwidth per nearby player. Left-click a surface within 600 units to place the body; Z and Sandbox cleanup remove it.
@@ -20,7 +31,13 @@ Softness scales edge and bend compliance logarithmically. Inflation sets a ball'
 | Right click | Pin or unpin the selected vertex; pins hold it fixed in the world |
 | R, or switching tools | Finish dragging |
 
-Only the owner or an admin can edit a soft body, subject to CanTool and CPPI, and only one player can drag it at a time. The server redoes the aim trace and checks walls and distance; clients never send vertex numbers or positions. Death, disconnecting, removing the body or reloading Lua ends a drag. The physics gun can't grab soft bodies.
+Only the owner or an admin can edit a soft body, subject to CanTool and CPPI, and only one player can drag it at a time. The server redoes the aim trace and checks walls and distance; clients never send vertex numbers or positions. Death, disconnecting, removing the body or reloading Lua ends a drag.
+
+**Regular physics gun**: aim at a soft body within 600 units and hold left click to grab a vertex near the hit point; the rest of the mesh deforms with it. Scroll to adjust distance. Release left click to restore the original pin state, or right-click while holding to pin that point to the world. Unpin it with the workshop's right-click action. Grabbing checks ownership, `CPPICanPhysgun` and `PhysgunPickup`, shares the workshop's exclusive drag lock, and releases on weapon switches.
+
+The grabbed point targets arrival in one game physics tick, without the workshop's slower easing coefficient, while respecting the body's configured velocity limit. The holder displays the latest server mesh without the additional spectator interpolation delay and receives snapshots at up to 60 Hz within the existing bandwidth budget. Other players retain interpolated rendering.
+
+New configurations default to 10 solver iterations. Existing saved settings are preserved; set both server `jolt_softbody_iterations` and tool `jolt_softbody_bodyiterations` to `10`, then create a new soft body to use this value.
 
 With **Player collision** on, the body blocks players: its entity answers Source traces against the live mesh, natively on the server and against the drawn mesh on each client. With it off (the default), players walk through, and the server checks overlaps at a limited rate and pushes the body with an impulse from the player's mass and velocity. That approximates contact; it doesn't solve it continuously. Damage forces such as bullets and explosions also push the body near the hit point.
 
@@ -44,7 +61,7 @@ Admins can also change these under **Q → Options → Jolt → Soft body**. Siz
 | `jolt_softbody_maxrecords` | 32 | Soft bodies on the server; the addon never exceeds 32 |
 | `jolt_softbody_maxvertices` | 4096 | Vertices on the server in total |
 | `jolt_softbody_maxvertices_per_body` / `jolt_softbody_maxtriangles_per_body` | 1024 / 2048 | Vertices / triangles per body |
-| `jolt_softbody_iterations` | 5 | Maximum solver iterations |
+| `jolt_softbody_iterations` | 10 | Maximum solver iterations |
 | `jolt_softbody_damping` | 0.35 | Maximum damping |
 | `jolt_softbody_friction` / `jolt_softbody_restitution` | 0.6 / 0.05 | Maximum friction / restitution |
 | `jolt_softbody_vertex_radius` | 0.5 | Maximum vertex collision radius |
@@ -132,7 +149,7 @@ assert(ball, reason)
 | `environment` | 0 | VPhysics environment index; the body stays in it |
 | `pos`, `angles` | Zero | Initial position and Source Euler angles |
 | `velocity` | Zero | Initial world velocity of unpinned vertices, Source units/s, up to `maxVelocity` |
-| `iterations` | 5 | Solver iterations, 1–32 |
+| `iterations` | 10 | Solver iterations, 1–32 |
 | `edgeCompliance` | 0.00001 | Compliance of edges and generated shear edges, 0–1, s²/kg |
 | `bendCompliance` | 0.001 | Bend compliance, 0–1; s²/kg for distance bending |
 | `dihedralBend` | `false` | Bend by the angle between adjacent triangles instead |
@@ -206,7 +223,7 @@ A yield of 0.04 is 4% edge strain, or 7.2° with dihedral bending. Results depen
 
 ## Interaction and limits
 
-- Soft bodies collide both ways with rigid bodies and the world, but aren't `IPhysicsObject`s, so the physics gun, constraints, Source collision callbacks and saves don't see them. A body from `Create` has no entity, so Source traces miss it as well; the workshop adds an entity for that.
+- Soft bodies collide both ways with rigid bodies and the world, but aren't `IPhysicsObject`s and cannot directly use rigid-body constraints, Source collision callbacks or saves. A body from `Create` has no entity, so Source traces miss it as well; the workshop adds an entity and regular physics-gun vertex grabbing.
 - The player controller's contact queries ignore soft bodies, and vehicle wheels can't rest on them, though a vehicle's chassis still hits them.
 - Soft bodies use world gravity times `gravityFactor`; gravity fields and per-object gravity don't affect them.
 - Not supported: soft body–soft body collisions, self-collision, tearing, skinning and tetrahedral volume constraints. Soft bodies can't join rigid-body constraints such as gears; a pinned vertex moved with `SetVertexVelocity` serves as a moving attachment instead.

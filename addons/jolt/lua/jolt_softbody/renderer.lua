@@ -69,7 +69,7 @@ function renderer.Update(data, positions, boundsReady)
 		local offset = (topology.indices[corner] - 1) * 3
 		local diffuse = normals[offset + 1] * -0.35 + normals[offset + 2] * -0.3 + normals[offset + 3] * 0.88
 		-- Thin cloth is lit on both sides. The sphere keeps a directional silhouette.
-		local shade = (data.kind == 1 and 0.6 + 0.4 * abs(diffuse) or 0.48 + 0.52 * max(0, diffuse)) * topology.shade[corner]
+		local shade = (data.kind ~= 2 and 0.6 + 0.4 * abs(diffuse) or 0.48 + 0.52 * max(0, diffuse)) * topology.shade[corner]
 		data.red[corner] = min(255, palette.r * shade * data.lightR)
 		data.green[corner] = min(255, palette.g * shade * data.lightG)
 		data.blue[corner] = min(255, palette.b * shade * data.lightB)

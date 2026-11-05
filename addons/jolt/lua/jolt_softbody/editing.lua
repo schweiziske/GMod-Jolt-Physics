@@ -5,11 +5,24 @@ local gameplay = include("jolt_gameplay/server.lua")
 local editing = {Drags = {}}
 local zero = Vector()
 
+local function activePhysgun(owner)
+	if not IsValid(owner) or not owner:Alive() or owner:InVehicle() then return false end
+	local weapon = owner:GetActiveWeapon()
+	return IsValid(weapon) and weapon:GetClass() == "weapon_physgun"
+end
+
+local function canPhysgun(owner, record)
+	if not activePhysgun(owner) or not IsValid(record.entity) or not record.body:IsValid() then return false end
+	if record.entity.PhysgunDisabled then return false end
+	if record.owner ~= owner and not owner:IsAdmin() then return false end
+	return not record.entity.CPPICanPhysgun or record.entity:CPPICanPhysgun(owner) ~= false
+end
+
 local function activeTool(owner)
 	if not IsValid(owner) or not owner:Alive() then return end
 	local weapon = owner:GetActiveWeapon()
 	if not IsValid(weapon) or weapon:GetClass() ~= "gmod_tool" or weapon:GetMode() ~= "jolt_softbody"
-		or owner:GetInfo("jolt_softbody_mode") ~= "edit" then return end
+		or not ({edit = true, attach = true, cut = true})[owner:GetInfo("jolt_softbody_mode")] then return end
 	local tool = weapon:GetToolObject("jolt_softbody")
 	return tool and tool:Allowed() and tool or nil
 end
@@ -47,6 +60,8 @@ function editing.Release(owner)
 	if IsValid(owner) then
 		owner:SetNW2Int("jolt_softbody_drag_id", 0)
 		owner:SetNW2Int("jolt_softbody_drag_vertex", 0)
+		owner:SetNW2Bool("jolt_softbody_physgun", false)
+		if drag.physgun and IsValid(record.entity) then hook.Run("PhysgunDrop", owner, record.entity) end
 	end
 end
 
@@ -54,14 +69,13 @@ function editing.ReleaseRecord(record)
 	if record.dragOwner then editing.Release(record.dragOwner) end
 end
 
-function editing.Begin(owner)
-	editing.Release(owner)
-	local record, vertex, depth, hit = editing.Pick(owner, 1)
-	if not record then if vertex then gameplay.Fail(owner, vertex) end return end
+local function beginDrag(owner, record, vertex, depth, hit, physgun)
 	if record.dragOwner then return gameplay.Fail(owner, I.Phrase("jolt.another_player_is_dragging_this_soft_body")) end
+	if api.Attachments then api.Attachments.Detach(record, vertex) end
 	local point = {}
 	if not record.body:ReadVertex(vertex, point) or not record.body:SetVertexPinned(vertex, true) then return end
 	local drag = {
+		physgun = physgun, held = true,
 		record = record, vertex = vertex, depth = depth, wasPinned = point.pinned, point = point,
 		offsetX = point.x - hit.HitPos.x, offsetY = point.y - hit.HitPos.y, offsetZ = point.z - hit.HitPos.z,
 		velocity = Vector(), permission = hit, nextPermission = 0,
@@ -71,12 +85,53 @@ function editing.Begin(owner)
 	record.forceSample = true
 	owner:SetNW2Int("jolt_softbody_drag_id", record.id)
 	owner:SetNW2Int("jolt_softbody_drag_vertex", vertex)
+	owner:SetNW2Bool("jolt_softbody_physgun", physgun == true)
+	return drag
+end
+
+function editing.Begin(owner)
+	editing.Release(owner)
+	local record, vertex, depth, hit = editing.Pick(owner, 1)
+	if not record then if vertex then gameplay.Fail(owner, vertex) end return end
+	return beginDrag(owner, record, vertex, depth, hit, false)
+end
+
+function editing.BeginPhysgun(owner, direction)
+	-- Recompute both obstruction and native mesh hit on the server. Client input
+	-- never supplies a record ID, vertex index or target position.
+	if not activePhysgun(owner) or editing.Drags[owner] then return end
+	local origin = owner:GetShootPos()
+	local trace = util.TraceLine({start = origin, endpos = origin + direction * config.EditDistance, filter = owner, mask = MASK_SOLID})
+	local record = IsValid(trace.Entity) and trace.Entity.JoltSoftBodyRecord
+	if not record or not canPhysgun(owner, record) then return end
+	local hit = record.body:Trace(origin, direction * config.EditDistance)
+	if not hit or not hit.Hit or hit.Vertex < 1 or hit.Fraction < 0 or hit.Fraction > 1 then return end
+	if hook.Run("PhysgunPickup", owner, record.entity) == false then return end
+	-- Permission hooks may remove the entity or change ownership.
+	if not canPhysgun(owner, record) then return end
+	local drag = beginDrag(owner, record, hit.Vertex, hit.Fraction * config.EditDistance, hit, true)
+	if drag then hook.Run("OnPhysgunPickup", owner, record.entity) end
+	return drag
+end
+
+function editing.PhysgunInput(owner, held, wheel, freeze)
+	local drag = editing.Drags[owner]
+	if not drag or not drag.physgun then return end
+	drag.held = held
+	if not held or not activePhysgun(owner) then editing.Release(owner) return end
+	drag.depth = math.Clamp(drag.depth + wheel * 20, 24, config.EditDistance)
+	if freeze and canPhysgun(owner, drag.record) then
+		-- Pin just the grabbed vertex; leave the rest of the mesh simulated.
+		drag.wasPinned = true
+		editing.Release(owner)
+	end
 end
 
 function editing.TogglePin(owner)
 	local record, vertex = editing.Pick(owner, 2)
 	if not record then if vertex then gameplay.Fail(owner, vertex) end return end
 	if record.dragOwner then return gameplay.Fail(owner, I.Phrase("jolt.release_the_vertex_you_are_dragging_first")) end
+	if api.Attachments and api.Attachments.Detach(record, vertex) then return end
 	local point = {}
 	if record.body:ReadVertex(vertex, point) and record.body:SetVertexPinned(vertex, not point.pinned) then
 		record.forceSample = true
@@ -87,18 +142,32 @@ function editing.Input(tool)
 	local owner = tool:GetOwner()
 	local left, right = owner:KeyDown(IN_ATTACK), owner:KeyDown(IN_ATTACK2)
 	if activeTool(owner) then
-		if left and not tool.JoltLeftDown then editing.Begin(owner) end
-		if right and not tool.JoltRightDown then editing.TogglePin(owner) end
+		local mode = owner:GetInfo("jolt_softbody_mode")
+		if mode == "edit" then
+			if left and not tool.JoltLeftDown then editing.Begin(owner) end
+			if right and not tool.JoltRightDown then editing.TogglePin(owner) end
+		elseif mode == "attach" and api.Attachments then
+			if left and not tool.JoltLeftDown then api.Attachments.Click(owner) end
+			if right and not tool.JoltRightDown then api.Attachments.Unmount(owner) end
+		elseif mode == "cut" and left and not tool.JoltLeftDown and api.Tearing then
+			api.Tearing.Cut(owner)
+		end
 	end
 	tool.JoltLeftDown, tool.JoltRightDown = left, right
 end
 
 local function moveVertex(owner, drag, now)
 	local record, point = drag.record, drag.point
-	if not activeTool(owner) or not owner:KeyDown(IN_ATTACK) or not record.body:ReadVertex(drag.vertex, point) then return false end
+	if not IsValid(record.entity) or not record.body:IsValid() then return false end
+	if drag.physgun then
+		if not activePhysgun(owner) or not drag.held then return false end
+	elseif not activeTool(owner) or owner:GetInfo("jolt_softbody_mode") ~= "edit" or not owner:KeyDown(IN_ATTACK) then return false end
+	if not record.body:ReadVertex(drag.vertex, point) then return false end
 	if now >= drag.nextPermission then
 		drag.permission.HitPos:SetUnpacked(point.x, point.y, point.z)
-		if not canEdit(owner, record, drag.permission, 1) then return false end
+		if drag.physgun then
+			if not canPhysgun(owner, record) then return false end
+		elseif not canEdit(owner, record, drag.permission, 1) then return false end
 		drag.nextPermission = now + 0.25
 	end
 	local origin, direction = owner:GetShootPos(), owner:GetAimVector()
@@ -115,9 +184,13 @@ local function moveVertex(owner, drag, now)
 		local normal = trace.output.HitNormal
 		x, y, z = x + normal.x * 3, y + normal.y * 3, z + normal.z * 3
 	end
-	local vx, vy, vz = (x - point.x) * 18, (y - point.y) * 18, (z - point.z) * 18
+	-- A physgun target is reached in one simulation tick, rather than following
+	-- the workshop's exponential easing. Respect the body's native velocity limit.
+	local gain = drag.physgun and 1 / engine.TickInterval() or 18
+	local vx, vy, vz = (x - point.x) * gain, (y - point.y) * gain, (z - point.z) * gain
 	local speed = math.sqrt(vx * vx + vy * vy + vz * vz)
-	local scale = speed > 900 and 900 / speed or 1
+	local maximum = drag.physgun and record.settings.maxVelocity or math.min(900, record.settings.maxVelocity)
+	local scale = speed > maximum and maximum / speed or 1
 	drag.velocity:SetUnpacked(vx * scale, vy * scale, vz * scale)
 	return record.body:SetVertexVelocity(drag.vertex, drag.velocity)
 end

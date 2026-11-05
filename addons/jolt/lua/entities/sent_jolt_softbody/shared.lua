@@ -34,5 +34,5 @@ function ENT:TestCollision(start, delta, isBox, extents, mask)
 	end
 	if not record.buffer or not record.render or record.render.revision == 0 then return false end
 	return JoltSoftBodies.Collision.Trace(record.buffer.display, record.geometry.indices,
-		start, delta, isBox and extents or nil, record.settings.kind ~= 1, record.collision, record.buffer.revision)
+		start, delta, isBox and extents or nil, record.settings.kind == 2, record.collision, record.buffer.revision)
 end

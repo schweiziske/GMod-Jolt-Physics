@@ -3,6 +3,7 @@ local api = JoltSoftBodies
 local config, geometry, renderer = api.Config, api.Geometry, api.Renderer
 local toolClient = {}
 local keys = {"kind", "quality", "width", "height", "mass", "softness", "inflation", "pins", "palette", "rotation", "playercollision", "bodyiterations", "bodydamping", "bodyfriction", "bodyrestitution", "vertexradius", "maxvelocity", "gravity"}
+for _, key in ipairs({"material", "tearing", "tearstrain", "dihedral", "plasticyield", "plasticcreep", "plasticstrain"}) do keys[#keys + 1] = key end
 local state = {
 	raw = {}, nextSettings = 0, nextPick = 0, matrix = Matrix(), position = Vector(), angle = Angle(),
 	marker = Vector(), valid = false, title = I.Phrase("jolt.jolt_soft_body"), detail = "", hint = "", mode = "create",
@@ -46,7 +47,7 @@ end
 local function updateText(owner)
 	if state.mode == "create" then
 		local settings = state.settings
-		state.title = settings.kind == 1 and I.Phrase("jolt.create_cloth") or I.Phrase("jolt.create_soft_ball")
+		state.title = I.Phrase(({"jolt.create_cloth", "jolt.create_soft_ball", "jolt.soft_rope", "jolt.fabric_strap"})[settings.kind])
 		local count = config.VertexCount(settings.kind, settings.quality)
 		state.detail = I.Format("jolt.d_vertices_1f_kg_approx_1f_kib_s", count, settings.mass,
 			config.SnapshotBytes(count) / config.NearInterval / 1024)
@@ -64,6 +65,12 @@ local function updateText(owner)
 			state.detail = I.Phrase("jolt.aim_at_a_soft_body_surface_to_select_a_nearby_vertex")
 			state.hint = I.Phrase("jolt.gold_vertices_are_pinned_blue_is_selected")
 		end
+		if state.mode == "attach" then
+			state.title = I.Phrase("jolt.mount_points")
+			state.hint = I.Phrase(owner:GetNW2Int("jolt_softbody_mount_id", 0) ~= 0 and "jolt.mount_target_hint" or "jolt.mount_pick_hint")
+		elseif state.mode == "cut" then
+			state.title, state.hint = I.Phrase("jolt.cut_softbody"), I.Phrase("jolt.cut_help")
+		end
 	end
 end
 
@@ -76,7 +83,7 @@ function toolClient.Think(tool)
 		state.nextSettings = now + 0.15
 	end
 	if not state.settings then return end
-	state.mode = tool:GetClientInfo("mode") == "edit" and "edit" or "create"
+	state.mode = tool:GetClientInfo("mode")
 	local trace, origin = owner:GetEyeTrace(), owner:GetShootPos()
 	state.valid = trace.Hit and not trace.HitSky and origin:DistToSqr(trace.HitPos) <= config.EditDistance ^ 2
 	if state.mode == "create" and state.valid then
@@ -87,12 +94,14 @@ function toolClient.Think(tool)
 		state.angle:SetUnpacked(0, yaw, 0)
 		state.matrix:SetAngles(state.angle)
 		state.matrix:SetTranslation(state.position)
-	elseif state.mode == "edit" and now >= state.nextPick then
+	elseif state.mode ~= "create" and now >= state.nextPick then
 		local direction = owner:GetAimVector()
 		local limit = math.min(config.EditDistance, math.sqrt(origin:DistToSqr(trace.HitPos)) + 1)
 		state.selected, state.vertex = api.Client.Pick(origin.x, origin.y, origin.z, direction.x, direction.y, direction.z, limit)
 		local dragged = api.Client.Records[owner:GetNW2Int("jolt_softbody_drag_id", 0)]
 		if dragged then state.selected, state.vertex = dragged, owner:GetNW2Int("jolt_softbody_drag_vertex", 0) end
+		local mounting = api.Client.Records[owner:GetNW2Int("jolt_softbody_mount_id", 0)]
+		if state.mode == "attach" and mounting then state.selected, state.vertex = mounting, owner:GetNW2Int("jolt_softbody_mount_vertex", 0) end
 		state.nextPick = now + 0.05
 	end
 	if refresh then updateText(owner) end
@@ -118,6 +127,16 @@ local function drawSelection()
 		local offset = (selected - 1) * 3
 		state.marker:SetUnpacked(positions[offset + 1], positions[offset + 2], positions[offset + 3])
 		render.DrawSprite(state.marker, 9, 9, colors.selected)
+		if state.mode == "attach" and LocalPlayer():GetNW2Int("jolt_softbody_mount_id", 0) == record.id then
+			render.DrawLine(state.marker, LocalPlayer():GetEyeTrace().HitPos, colors.selected, true)
+		elseif state.mode == "cut" and record.geometry.columns then
+			local columns, first = record.geometry.columns, math.floor((selected - 1) / record.geometry.columns) * record.geometry.columns
+			for column = 1, columns - (record.settings.kind == 3 and 0 or 1) do
+				local a, b = (first + column - 1) * 3, (first + column % columns) * 3
+				render.DrawLine(Vector(positions[a + 1], positions[a + 2], positions[a + 3]),
+					Vector(positions[b + 1], positions[b + 2], positions[b + 3]), colors.warning, true)
+			end
+		end
 	end
 end
 
@@ -137,7 +156,9 @@ function toolClient.DrawHUD()
 		state.mode == "create" and not state.valid and colors.warning or colors.accent)
 	draw.SimpleText(state.detail, "JoltSoftBodyHudText", x, y + 52, colors.text)
 	draw.SimpleText(state.hint, "JoltSoftBodyHudText", x, y + 96, colors.muted)
-	draw.SimpleText(I.Phrase("jolt.lmb_spawn_drag_vertex_rmb_pin_release_vertex_r_cancel_drag"), "JoltSoftBodyHudText", x, y + 140, colors.text)
+	local controls = state.mode == "attach" and "jolt.unmount_help" or state.mode == "cut" and "jolt.cut_interior_seam"
+		or "jolt.lmb_spawn_drag_vertex_rmb_pin_release_vertex_r_cancel_drag"
+	draw.SimpleText(I.Phrase(controls), "JoltSoftBodyHudText", x, y + 140, colors.text)
 end
 
 function toolClient.Shutdown()

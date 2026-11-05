@@ -53,7 +53,7 @@ struct VJoltSoftBodySettings
 {
 	uint32_t size = sizeof( VJoltSoftBodySettings );
 	uint32_t flags = VJoltSoftBodyAllowSleeping | VJoltSoftBodyDoubleSided;
-	uint32_t iterations = 5;
+	uint32_t iterations = 10;
 	VJoltSoftBodyVector position{};
 	VJoltSoftBodyVector angles{};    // Source pitch, yaw, roll in degrees.
 	VJoltSoftBodyVector velocity{};  // Initial world velocity of unpinned vertices.

@@ -5,6 +5,7 @@
 #include "vjolt_environment.h"
 #include "vjolt_interface.h"
 #include "vjolt_layers.h"
+#include <vjolt/softbody_fragment.h>
 
 #include <Jolt/Physics/SoftBody/SoftBodyCreationSettings.h>
 #include <Jolt/Physics/SoftBody/SoftBodyMotionProperties.h>
@@ -12,6 +13,9 @@
 #include <memory>
 #include <new>
 #include <unordered_map>
+#include <array>
+#include <map>
+#include <set>
 
 #include "tier0/memdbgon.h"
 
@@ -32,6 +36,7 @@ struct SoftBodyRecord
 	JoltPhysicsEnvironment *environment = nullptr;
 	JPH::Body *body = nullptr;
 	PreparedMesh mesh;
+	VJoltSoftBodySettings creationSettings;
 	VJoltSoftBodyPlasticity plasticity;
 	std::vector<float> originalEdgeLengths;
 	std::vector<float> originalBendAngles;
@@ -82,7 +87,7 @@ bool IsValidRange( uint32_t first, uint32_t count, size_t size, const Value *out
 	return first <= size && count <= size - first && ( count == 0 || output != nullptr );
 }
 
-class SoftBodyBridge final : public IVJoltSoftBodyBridge, public IVJoltSoftBodyTools
+class SoftBodyBridge final : public IVJoltSoftBodyBridge, public IVJoltSoftBodyTools, public IVJoltSoftBodyFragment
 {
 public:
 	uint32_t GetVersion() const override
@@ -126,6 +131,7 @@ public:
 		{
 			auto record = std::make_unique<SoftBodyRecord>();
 			record->environment = environment;
+			record->creationSettings = settings;
 			const auto prepared = PrepareMesh( mesh, settings, record->mesh );
 			if ( prepared != VJoltSoftBodyError::None )
 			{
@@ -153,6 +159,136 @@ public:
 		{
 			return fail( VJoltSoftBodyError::AllocationFailed );
 		}
+	}
+
+	VJoltSoftBodyHandle CreateFragment( VJoltSoftBodyHandle parentHandle, uint32_t count,
+		const uint32_t *sources, const float *fractions, uint32_t faceCount,
+		const VJoltSoftBodyTriangle *faces, VJoltSoftBodyError *error ) override
+	{
+		const auto fail = [error]( VJoltSoftBodyError reason ) -> VJoltSoftBodyHandle
+		{
+			if ( error ) *error = reason;
+			return 0;
+		};
+		auto *parent = FindIdle( parentHandle );
+		if ( !parent || !sources || !fractions || !faces || count < 3 || faceCount == 0 )
+			return fail( VJoltSoftBodyError::InvalidMesh );
+		if ( count > kVJoltSoftBodyMaxVertices || faceCount > kVJoltSoftBodyMaxTriangles
+			|| m_Bodies.size() >= kVJoltSoftBodyMaxBodies || count > kVJoltSoftBodyMaxTotalVertices - m_VertexCount
+			|| m_NextHandle == std::numeric_limits<VJoltSoftBodyHandle>::max() )
+			return fail( VJoltSoftBodyError::LimitExceeded );
+		try
+		{
+			auto record = std::make_unique<SoftBodyRecord>();
+			record->environment = parent->environment;
+			auto settings = parent->creationSettings;
+			settings.position = {}; settings.angles = {}; settings.velocity = {}; settings.pressure = 0;
+			record->creationSettings = settings;
+			std::vector<VJoltSoftBodyVertex> vertices( count );
+			std::set<uint32_t> unique;
+			const auto &rest = parent->mesh.settings->mVertices;
+			const auto &current = parent->Motion().GetVertices();
+			for ( uint32_t i = 0; i < count; ++i )
+			{
+				if ( sources[i] >= current.size() || !unique.insert( sources[i] ).second
+					|| !IsFiniteWithin( fractions[i], 0.000001f, 1.0f ) )
+					return fail( VJoltSoftBodyError::InvalidVertex );
+				vertices[i] = { ToSource( JPH::Vec3( rest[sources[i]].mPosition ) ),
+					fractions[i] / parent->mesh.inverseMasses[sources[i]], current[sources[i]].mInvMass == 0 ? 1u : 0u };
+			}
+			// Accept only existing, consistently wound parent faces (cyclic rotations allowed).
+			const auto faceKey = []( uint32_t a, uint32_t b, uint32_t c )
+			{
+				return a < b && a < c ? std::array<uint32_t, 3>{ a, b, c }
+					: b < c ? std::array<uint32_t, 3>{ b, c, a } : std::array<uint32_t, 3>{ c, a, b };
+			};
+			std::set<std::array<uint32_t, 3>> allowed;
+			for ( const auto &face : parent->mesh.settings->mFaces )
+				allowed.insert( faceKey( face.mVertex[0], face.mVertex[1], face.mVertex[2] ) );
+			for ( uint32_t i = 0; i < faceCount; ++i )
+			{
+				const auto *v = faces[i].vertices;
+				if ( v[0] >= count || v[1] >= count || v[2] >= count
+					|| !allowed.count( faceKey( sources[v[0]], sources[v[1]], sources[v[2]] ) ) )
+					return fail( VJoltSoftBodyError::InvalidTriangle );
+			}
+			VJoltSoftBodyMesh mesh;
+			mesh.vertexCount = count; mesh.vertices = vertices.data();
+			mesh.triangleCount = faceCount; mesh.triangles = faces;
+			const auto result = PrepareMesh( mesh, settings, record->mesh, true );
+			if ( result != VJoltSoftBodyError::None ) return fail( result );
+			const auto edgeKey = []( uint32_t a, uint32_t b ) { return uint64_t( std::min( a, b ) ) << 32 | std::max( a, b ); };
+			std::unordered_map<uint64_t, size_t> edges;
+			const auto &parentEdges = parent->mesh.settings->mEdgeConstraints;
+			for ( size_t i = 0; i < parentEdges.size(); ++i )
+				edges.emplace( edgeKey( parentEdges[i].mVertex[0], parentEdges[i].mVertex[1] ), i );
+			for ( auto &edge : record->mesh.settings->mEdgeConstraints )
+			{
+				float original = edge.mRestLength;
+				const auto found = edges.find( edgeKey( sources[edge.mVertex[0]], sources[edge.mVertex[1]] ) );
+				if ( found != edges.end() )
+				{
+					edge.mRestLength = parentEdges[found->second].mRestLength;
+					if ( !parent->originalEdgeLengths.empty() ) original = parent->originalEdgeLengths[found->second];
+				}
+				record->originalEdgeLengths.push_back( original );
+			}
+			std::map<std::array<uint32_t, 4>, size_t> bends;
+			const auto &parentBends = parent->mesh.settings->mDihedralBendConstraints;
+			for ( size_t i = 0; i < parentBends.size(); ++i )
+			{
+				const auto *v = parentBends[i].mVertex;
+				bends.emplace( std::array<uint32_t, 4>{ v[0], v[1], v[2], v[3] }, i );
+			}
+			for ( auto &bend : record->mesh.settings->mDihedralBendConstraints )
+			{
+				const auto *v = bend.mVertex;
+				float original = bend.mInitialAngle;
+				const auto found = bends.find( { sources[v[0]], sources[v[1]], sources[v[2]], sources[v[3]] } );
+				if ( found != bends.end() )
+				{
+					bend.mInitialAngle = parentBends[found->second].mInitialAngle;
+					if ( !parent->originalBendAngles.empty() ) original = parent->originalBendAngles[found->second];
+				}
+				record->originalBendAngles.push_back( original );
+			}
+			record->plasticity = parent->plasticity;
+			// Initialize at the live positions so native bounds/contact state are
+			// correct immediately. Constraint rest data was prepared above and must
+			// never be recalculated from this deformed pose.
+			auto &initial = record->mesh.settings->mVertices;
+			for ( uint32_t i = 0; i < count; ++i )
+			{
+				current[sources[i]].mPosition.StoreFloat3( &initial[i].mPosition );
+				current[sources[i]].mVelocity.StoreFloat3( &initial[i].mVelocity );
+				initial[i].mInvMass = vertices[i].pinned ? 0 : record->mesh.inverseMasses[i];
+			}
+			JPH::SoftBodyCreationSettings creation( record->mesh.settings,
+				parent->body->GetPosition(), parent->body->GetRotation(), Layers::MOVING );
+			creation.mMakeRotationIdentity = false;
+			creation.mNumIterations = parent->Motion().GetNumIterations();
+			creation.mPressure = 0;
+			creation.mGravityFactor = parent->Motion().GetGravityFactor();
+			creation.mLinearDamping = settings.damping;
+			creation.mFriction = settings.friction;
+			creation.mRestitution = settings.restitution;
+			creation.mVertexRadius = parent->Motion().GetVertexRadius();
+			creation.mMaxLinearVelocity = parent->Motion().GetMaxLinearVelocity();
+			creation.mAllowSleeping = ( settings.flags & VJoltSoftBodyAllowSleeping ) != 0;
+			creation.mFacesDoubleSided = ( settings.flags & VJoltSoftBodyDoubleSided ) != 0;
+			auto &bodies = record->environment->GetPhysicsSystem()->GetBodyInterfaceNoLock();
+			record->body = bodies.CreateSoftBody( creation );
+			if ( !record->body ) return fail( VJoltSoftBodyError::AllocationFailed );
+			for ( uint32_t i = 0; i < count; ++i ) initial[i].mPosition = rest[sources[i]].mPosition;
+			const auto handle = m_NextHandle++;
+			auto *body = record->body;
+			m_Bodies.emplace( handle, std::move( record ) );
+			m_VertexCount += count;
+			bodies.AddBody( body->GetID(), JPH::EActivation::Activate );
+			if ( error ) *error = VJoltSoftBodyError::None;
+			return handle;
+		}
+		catch ( const std::bad_alloc & ) { return fail( VJoltSoftBodyError::AllocationFailed ); }
 	}
 
 	bool IsValid( VJoltSoftBodyHandle handle ) const override
@@ -640,6 +776,9 @@ EXPOSE_SINGLE_INTERFACE_GLOBALVAR(
 
 EXPOSE_SINGLE_INTERFACE_GLOBALVAR(
 	SoftBodyBridge, IVJoltSoftBodyTools, VJOLT_SOFTBODY_TOOLS_VERSION, g_SoftBodyBridge );
+
+EXPOSE_SINGLE_INTERFACE_GLOBALVAR(
+	SoftBodyBridge, IVJoltSoftBodyFragment, VJOLT_SOFTBODY_FRAGMENT_VERSION, g_SoftBodyBridge );
 
 void VJoltSoftBodyBeforeSimulation( JoltPhysicsEnvironment *environment )
 {

@@ -9,7 +9,7 @@ local recordLimit = CreateConVar("jolt_softbody_maxrecords", "32", FCVAR_ARCHIVE
 local vertexLimit = CreateConVar("jolt_softbody_maxvertices", "4096", FCVAR_ARCHIVE, "Server soft-body vertex budget", 0, 131072)
 local bodyVertexLimit = CreateConVar("jolt_softbody_maxvertices_per_body", "1024", FCVAR_ARCHIVE, "Maximum vertices in one soft body", 3, 8192)
 local bodyTriangleLimit = CreateConVar("jolt_softbody_maxtriangles_per_body", "2048", FCVAR_ARCHIVE, "Maximum triangles in one soft body", 1, 16384)
-local iterations = CreateConVar("jolt_softbody_iterations", "5", FCVAR_ARCHIVE, "Default soft-body solver iterations", 1, 32)
+local iterations = CreateConVar("jolt_softbody_iterations", "10", FCVAR_ARCHIVE, "Maximum soft-body solver iterations", 1, 32)
 local damping = CreateConVar("jolt_softbody_damping", "0.35", FCVAR_ARCHIVE, "Default soft-body damping", 0, 10)
 local friction = CreateConVar("jolt_softbody_friction", "0.6", FCVAR_ARCHIVE, "Default soft-body friction", 0, 1)
 local restitution = CreateConVar("jolt_softbody_restitution", "0.05", FCVAR_ARCHIVE, "Default soft-body restitution", 0, 1)
@@ -103,7 +103,8 @@ end
 
 function server.SpawnPrepared(owner, settings, position, angles, velocity)
 	if not IsValid(owner) or not owner:Alive() then return end
-	local count = config.VertexCount(settings.kind, settings.quality)
+	local mesh = geometry.Generate(settings)
+	local count = mesh.vertexCount
 	local owned = 0
 	for index = 1, #server.Order do
 		if server.Order[index].owner == owner then owned = owned + 1 end
@@ -115,8 +116,7 @@ function server.SpawnPrepared(owner, settings, position, angles, velocity)
 		owner:LimitHit("jolt_softbodies")
 		return nil
 	end
-	if count > bodyVertexLimit:GetInt() or (settings.kind == 2 and 20 * 4 ^ config.SphereSubdivisions[settings.quality] > bodyTriangleLimit:GetInt())
-		or (settings.kind == 1 and 2 * (config.ClothResolution[settings.quality] - 1) ^ 2 > bodyTriangleLimit:GetInt()) then
+	if count > bodyVertexLimit:GetInt() or mesh.triangleCount > bodyTriangleLimit:GetInt() then
 		return nil, I.Phrase("jolt.the_soft_body_exceeds_the_configured_mesh_limit")
 	end
 	if #server.Order >= math.min(recordLimit:GetInt(), config.MaxRecords) or server.VertexCount + count > vertexLimit:GetInt() then
@@ -125,13 +125,13 @@ function server.SpawnPrepared(owner, settings, position, angles, velocity)
 	if nextID > 2147483647 then return nil, I.Phrase("jolt.soft_body_ids_exhausted_change_the_map") end
 	local native, reason = gameplay.LoadFeature("softbody")
 	if not native then return nil, reason end
-	local mesh = geometry.Generate(settings)
 	local vertices, triangles = nativeMesh(mesh, settings.mass)
 	local softness = settings.softness / 100
+	settings.maxVelocity = math.Clamp(settings.maxVelocity or maxVelocity:GetFloat(), 1, maxVelocity:GetFloat())
 	local body, detail = native.Create(vertices, triangles, {
 		pos = position, angles = angles, velocity = velocity or Vector(),
 		iterations = math.Clamp(settings.iterations or iterations:GetInt(), 1, iterations:GetInt()),
-		dihedralBend = false,
+		dihedralBend = settings.dihedral == true,
 		edgeCompliance = 10 ^ (-7 + softness * 4),
 		bendCompliance = 10 ^ (-5 + softness * 4),
 		pressure = settings.kind == 2 and settings.mass * 600 * settings.width * 0.5 * settings.inflation / 100 or 0,
@@ -144,10 +144,25 @@ function server.SpawnPrepared(owner, settings, position, angles, velocity)
 			-math.max(1, math.abs(gravityFactor:GetFloat())), math.max(1, math.abs(gravityFactor:GetFloat()))),
 	})
 	if not body then return nil, detail end
+	if (settings.plasticcreep or 0) > 0 and (not body.SetPlasticity
+		or not body:SetPlasticity(settings.plasticyield, settings.plasticcreep, settings.plasticstrain)) then
+		body:Destroy()
+		return nil, I.Phrase("jolt.softbody_update_native")
+	end
 	if not body.ReadSnapshot or not body.ReadVertex or not body.ReadState or not body.Trace then
 		body:Destroy()
 		return nil, I.Phrase("jolt.update_the_soft_body_dll_and_physics_backend_together_live_trace_sta")
 	end
+	local record, reason = server.Register(owner, settings, mesh, body, position)
+	if record then server.Track(record) end
+	return record, reason
+end
+
+-- Registration is separate from allocation so both halves can be prepared
+-- before committing a tear. No undo/quota side effects until Track is called.
+function server.Register(owner, settings, mesh, body, position)
+	if nextID > 2147483647 then body:Destroy() return nil, I.Phrase("jolt.soft_body_ids_exhausted_change_the_map") end
+	local count = mesh.vertexCount
 	local entity = ents.Create(config.EntityClass)
 	if not IsValid(entity) then
 		body:Destroy()
@@ -179,14 +194,51 @@ function server.SpawnPrepared(owner, settings, position, angles, velocity)
 		return nil, I.Phrase("jolt.unable_to_read_the_initial_soft_body_snapshot")
 	end
 	if entity.CPPISetOwner then entity:CPPISetOwner(owner) end
-	gameplay.TrackEntity(owner, entity, "jolt_softbodies", I.Token("jolt.jolt_soft_body"))
 	return record
+end
+
+function server.Track(record, family)
+	local owner, entity = record.owner, record.entity
+	local original = not family
+	family = family or {records = {}, pieces = 1}
+	record.family = family
+	family.records[record.id] = record
+	owner:AddCount("jolt_softbodies", entity)
+	owner:AddCleanup("jolt_softbodies", entity)
+	if original then
+		undo.Create(I.UndoName(I.Token("jolt.jolt_soft_body")))
+		undo.AddFunction(function()
+			local pending = {}
+			for _, member in pairs(family.records) do pending[#pending + 1] = member.entity end
+			for _, item in ipairs(pending) do if IsValid(item) then item:Remove() end end
+		end)
+		undo.SetPlayer(owner)
+		undo.Finish()
+	end
+end
+
+function server.CanSplit(record, pieces)
+	local owner = record.owner
+	if not IsValid(owner) or not owner:Alive() or not owner:CheckLimit("jolt_softbodies") then return false end
+	local owned = 0
+	for _, item in ipairs(server.Order) do if item.owner == owner then owned = owned + 1 end end
+	if (owner:IsAdmin() or game.SinglePlayer()) and owned >= limit:GetInt() then return false end
+	local count = 0
+	for _, piece in ipairs(pieces) do
+		if piece.mesh.vertexCount > bodyVertexLimit:GetInt() or piece.mesh.triangleCount > bodyTriangleLimit:GetInt() then return false end
+		count = count + piece.mesh.vertexCount
+	end
+	return #server.Order + 1 <= math.min(recordLimit:GetInt(), config.MaxRecords)
+		and server.VertexCount - record.geometry.vertexCount + count <= vertexLimit:GetInt()
+		and nextID < 2147483647 and record.family.pieces < config.MaxPieces
 end
 
 function server.Remove(id)
 	local record = server.Records[id]
 	if not record then return end
 	server.Records[id] = nil
+	if record.family then record.family.records[id] = nil end
+	if api.Attachments then api.Attachments.ReleaseRecord(record) end
 	if api.Editing then api.Editing.ReleaseRecord(record) end
 	if api.Replication then api.Replication.Remove(record) end
 	record.body:Destroy()
@@ -251,6 +303,8 @@ local function pushPlayersIntoSoftBodies(now)
 end
 
 hook.Add("Tick", "JoltSoftBodyBounds", function()
+	if api.Attachments then api.Attachments.Think(CurTime()) end
+	if api.Editing then api.Editing.Think(CurTime()) end
 	for index = 1, #server.Order do
 		local record = server.Order[index]
 		if IsValid(record.entity) and record.body:ReadState(record.bounds) then updateBounds(record, record.bounds) end
@@ -260,7 +314,6 @@ end)
 
 local function think()
 	local now = CurTime()
-	if api.Editing then api.Editing.Think(now) end
 	for index = #server.Order, 1, -1 do
 		local record = server.Order[index]
 		if not IsValid(record.entity) or not record.body:IsValid() then
@@ -268,14 +321,18 @@ local function think()
 		elseif now >= record.nextSample or record.forceSample then
 			local ok = server.Sample(record, now, record.forceSample)
 			record.forceSample = false
-			record.nextSample = now + config.NearInterval
+			local drag = api.Editing and api.Editing.Drags[record.dragOwner]
+			record.nextSample = now + (drag and drag.physgun and engine.TickInterval() or config.NearInterval)
 			if not ok then record.entity:Remove() end
 		end
 	end
+	if api.Tearing then api.Tearing.Think(now) end
 	if api.Replication then api.Replication.Think(now) end
 end
 
 function api.Shutdown()
+	if api.Physgun then api.Physgun.Shutdown() end
+	if api.Attachments then api.Attachments.Shutdown() end
 	for index = #server.Order, 1, -1 do
 		local record = server.Order[index]
 		if IsValid(record.entity) then record.entity:Remove() end
