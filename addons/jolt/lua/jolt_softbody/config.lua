@@ -9,7 +9,7 @@ local config = {
 	SettingsSnapshotMessage = "jolt_softbody_settings_snapshot_v1",
 	EntityClass = "sent_jolt_softbody",
 	MaxVertices = 1024,
-	MaxRecords = 32,
+	MaxRecords = 256,
 	SnapshotSlots = 4,
 	NearInterval = 1 / 15,
 	FarInterval = 1 / 5,
@@ -54,9 +54,9 @@ end
 -- Server settings are kept as data so the options page, validation and
 -- descriptions stay in sync without duplicating ranges in client Lua.
 config.ServerSettings = {
-	{cvar = "sbox_maxjolt_softbodies", label = "jolt.softbody_player_limit", default = 3, min = 0, max = 128},
-	{cvar = "jolt_softbody_maxrecords", label = "jolt.softbody_live_limit", default = 32, min = 0, max = 256},
-	{cvar = "jolt_softbody_maxvertices", label = "jolt.softbody_vertex_budget", default = 4096, min = 0, max = 131072},
+	{cvar = "sbox_maxjolt_softbodies", label = "jolt.softbody_player_limit", default = 16, min = 0, max = 128},
+	{cvar = "jolt_softbody_maxrecords", label = "jolt.softbody_live_limit", default = 256, min = 0, max = 256},
+	{cvar = "jolt_softbody_maxvertices", label = "jolt.softbody_vertex_budget", default = 65536, min = 0, max = 131072},
 	{cvar = "jolt_softbody_maxvertices_per_body", label = "jolt.softbody_vertices_per_body", default = 1024, min = 3, max = 8192},
 	{cvar = "jolt_softbody_maxtriangles_per_body", label = "jolt.softbody_triangles_per_body", default = 2048, min = 1, max = 16384},
 	{cvar = "jolt_softbody_iterations", label = "jolt.solver_iterations", default = 10, min = 1, max = 32},

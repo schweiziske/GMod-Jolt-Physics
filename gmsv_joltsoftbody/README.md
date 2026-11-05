@@ -13,7 +13,7 @@ The Soft Body Workshop places cloth and inflatable soft balls in Sandbox, and th
 - **Cut / tear**: LMB cuts the highlighted cross-section of cloth, rope or strap. Balls cannot be cut. Optional automatic tearing requires overstretch in two consecutive samples; the threshold is extra length relative to the initial mesh.
 - **Material presets**: fabric, rubber, foam and foil fill the softness, damping, friction, bending and plasticity controls, which remain editable. Elastic materials recover; plastic materials can retain changes in constraint rest lengths or angles.
 
-A cut produces two independent bodies, preserving current positions, velocities, pins, attachments and rest geometry. Duplicated seam vertices receive half their original mass each. Failure to allocate either fragment keeps the original. Fragments count toward player/server quotas, including the default three-body player limit, and an original body can produce at most eight pieces. Undoing the original spawn removes every surviving piece.
+A cut produces two independent bodies, preserving current positions, velocities, pins, attachments and rest geometry. Duplicated seam vertices receive half their original mass each. Failure to allocate either fragment keeps the original. Fragments count toward player/server quotas, including the default 16-body player limit, and an original body can produce at most eight pieces. Undoing the original spawn removes every surviving piece.
 
 Attachments drive vertices to follow props; they do not apply rope tension back to props. Creation settings affect new bodies. Tearing requires matching updated backend and soft-body DLLs. The optional `VJoltSoftBodyFragment001` extension preserves the original `VJoltSoftBody001` ABI. Lua `body:CreateFragment(sourceIndices, massFractions, triangles)` uses one-based indices and leaves the parent alive for caller-managed commit or rollback.
 
@@ -71,9 +71,9 @@ Admins can also change these under **Q → Options → Jolt → Soft body**. Siz
 
 | ConVar | Default | Meaning |
 | --- | --- | --- |
-| `sbox_maxjolt_softbodies` | 3 | Soft bodies per player |
-| `jolt_softbody_maxrecords` | 32 | Soft bodies on the server; the addon never exceeds 32 |
-| `jolt_softbody_maxvertices` | 4096 | Vertices on the server in total |
+| `sbox_maxjolt_softbodies` | 16 | Soft bodies per player, including fragments |
+| `jolt_softbody_maxrecords` | 256 | Soft bodies on the server; the addon never exceeds 256 |
+| `jolt_softbody_maxvertices` | 65536 | Vertices on the server in total |
 | `jolt_softbody_maxvertices_per_body` / `jolt_softbody_maxtriangles_per_body` | 1024 / 2048 | Vertices / triangles per body |
 | `jolt_softbody_iterations` | 10 | Maximum solver iterations |
 | `jolt_softbody_damping` | 0.35 | Maximum damping |

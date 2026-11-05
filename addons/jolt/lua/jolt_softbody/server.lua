@@ -4,9 +4,9 @@ local config, geometry, protocol = api.Config, api.Geometry, api.Protocol
 local gameplay = include("jolt_gameplay/server.lua")
 local server = {Records = {}, Order = {}, VertexCount = 0}
 local nextID = _G.JoltSoftBodyNextID or 1
-local limit = CreateConVar("sbox_maxjolt_softbodies", "3", FCVAR_ARCHIVE, "Soft bodies per player", 0, 128)
-local recordLimit = CreateConVar("jolt_softbody_maxrecords", "32", FCVAR_ARCHIVE, "Maximum live soft bodies", 0, 256)
-local vertexLimit = CreateConVar("jolt_softbody_maxvertices", "4096", FCVAR_ARCHIVE, "Server soft-body vertex budget", 0, 131072)
+local limit = CreateConVar("sbox_maxjolt_softbodies", "16", FCVAR_ARCHIVE, "Soft bodies per player", 0, 128)
+local recordLimit = CreateConVar("jolt_softbody_maxrecords", "256", FCVAR_ARCHIVE, "Maximum live soft bodies", 0, 256)
+local vertexLimit = CreateConVar("jolt_softbody_maxvertices", "65536", FCVAR_ARCHIVE, "Server soft-body vertex budget", 0, 131072)
 local bodyVertexLimit = CreateConVar("jolt_softbody_maxvertices_per_body", "1024", FCVAR_ARCHIVE, "Maximum vertices in one soft body", 3, 8192)
 local bodyTriangleLimit = CreateConVar("jolt_softbody_maxtriangles_per_body", "2048", FCVAR_ARCHIVE, "Maximum triangles in one soft body", 1, 16384)
 local iterations = CreateConVar("jolt_softbody_iterations", "10", FCVAR_ARCHIVE, "Maximum soft-body solver iterations", 1, 32)

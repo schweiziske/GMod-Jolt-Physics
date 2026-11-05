@@ -13,7 +13,7 @@
 - **剪断／撕裂**：切换到此模式，左键沿高亮横截面剪断布料、绳索或布带；球体不参与切割。创建时勾选自动撕裂，可在连续两次检测到过度拉伸后断裂，阈值为相对初始长度的额外伸长百分比。
 - **材质预设**：布料、橡胶、泡沫、薄金属／铝箔。预设填写柔软度、阻尼、摩擦、弯曲与永久变形参数，之后仍可逐项调整。弹性材质恢复形状，启用永久变形的材质会改变约束的静止长度或角度。
 
-断裂产生两个独立软体，继承当前位置、速度、固定点、挂载和原始约束形状；断面重复顶点的质量各分一半。创建任一碎片失败时保留原软体。碎片计入玩家和服务器额度，每个原始软体最多拆成 8 段；Z 撤销原始创建会清理其所有剩余碎片。默认每玩家 3 个软体的额度同样约束拆分。
+断裂产生两个独立软体，继承当前位置、速度、固定点、挂载和原始约束形状；断面重复顶点的质量各分一半。创建任一碎片失败时保留原软体。碎片计入玩家和服务器额度，每个原始软体最多拆成 8 段；Z 撤销原始创建会清理其所有剩余碎片。默认每玩家 16 个软体的额度同样约束拆分。
 
 挂载点采用顶点跟随道具的方式，不向道具回传绳索张力。工具参数作用于新建对象。撕裂需要同时更新物理后端与 `gmsv_joltsoftbody`；原有 `VJoltSoftBody001` ABI 保持不变，新增可选 `VJoltSoftBodyFragment001` 接口。Lua 的 `body:CreateFragment(sourceIndices, massFractions, triangles)` 使用 1 起始索引，保留父对象以供调用方完成事务或回滚。
 
@@ -71,9 +71,9 @@
 
 | ConVar | 默认值 | 含义 |
 | --- | --- | --- |
-| `sbox_maxjolt_softbodies` | 3 | 每名玩家的软体数量 |
-| `jolt_softbody_maxrecords` | 32 | 全服软体数量；addon 实际最多管理 32 个 |
-| `jolt_softbody_maxvertices` | 4096 | 全服顶点总数 |
+| `sbox_maxjolt_softbodies` | 16 | 每名玩家的软体数量，包含碎片 |
+| `jolt_softbody_maxrecords` | 256 | 全服软体数量；addon 实际最多管理 256 个 |
+| `jolt_softbody_maxvertices` | 65536 | 全服顶点总数 |
 | `jolt_softbody_maxvertices_per_body` / `jolt_softbody_maxtriangles_per_body` | 1024 / 2048 | 单个软体的顶点数 / 三角形数 |
 | `jolt_softbody_iterations` | 10 | 求解迭代次数上限 |
 | `jolt_softbody_damping` | 0.35 | 阻尼上限 |
