@@ -13,17 +13,32 @@ hook.Add("StartCommand", "JoltSoftBodyPhysgun", function(owner, command)
 	if not state then state = {} inputs[owner] = state end
 	local weapon = owner:GetActiveWeapon()
 	local active = IsValid(weapon) and weapon:GetClass() == "weapon_physgun" and owner:Alive() and not owner:InVehicle()
-	local left, right = command:KeyDown(IN_ATTACK), command:KeyDown(IN_ATTACK2)
+	local left, right, reload = command:KeyDown(IN_ATTACK), command:KeyDown(IN_ATTACK2), command:KeyDown(IN_RELOAD)
 	if not active then
 		if SERVER then api.Editing.PhysgunInput(owner, false, 0, false) end
-		state.captured, state.left = false, left
+		state.captured, state.left, state.reload, state.blocked = false, left, reload, false
 		return
 	end
-	if left and not state.left then
+	if not left then state.blocked = false end
+	-- Keep acquiring while the beam is held over empty space. Once a rigid prop
+	-- was hit, leave that entire gesture to the engine rather than stealing it.
+	if left and not state.captured and not state.blocked and CurTime() >= (state.nextPick or 0) then
+		state.nextPick = CurTime() + 0.05
 		local origin, direction = owner:GetShootPos(), command:GetViewAngles():Forward()
-		local trace = util.TraceLine({start = origin, endpos = origin + direction * config.EditDistance, filter = owner, mask = MASK_SOLID})
-		state.captured = IsValid(trace.Entity) and trace.Entity:GetClass() == config.EntityClass
-		if SERVER and state.captured then api.Editing.BeginPhysgun(owner, direction) end
+		local trace
+		if SERVER then
+			local record, hit
+			record, hit, trace = api.Editing.TracePhysgun(owner, direction)
+			state.captured = record ~= nil
+			if state.captured then api.Editing.BeginPhysgun(owner, direction) end
+		else
+			trace = util.TraceLine({start = origin, endpos = origin + direction * config.EditDistance, filter = owner, mask = MASK_SOLID})
+			state.captured = IsValid(trace.Entity) and trace.Entity:GetClass() == config.EntityClass
+		end
+		state.blocked = not state.captured and IsValid(trace.Entity) and not trace.HitWorld
+	end
+	if SERVER and reload and not state.reload and not left then
+		if api.Editing.UnfreezePhysgun(owner, command:GetViewAngles():Forward()) then command:RemoveKey(IN_RELOAD) end
 	end
 	if SERVER then api.Editing.PhysgunInput(owner, left, command:GetMouseWheel(), right) end
 	-- Consume the whole captured gesture on the server, even after rejection,
@@ -34,8 +49,8 @@ hook.Add("StartCommand", "JoltSoftBodyPhysgun", function(owner, command)
 		command:RemoveKey(IN_ATTACK2)
 		command:RemoveKey(IN_RELOAD)
 	end
-	if not left then state.captured = false end
-	state.left = left
+	if not left then state.captured, state.nextPick = false, 0 end
+	state.left, state.reload = left, reload
 end)
 
 if CLIENT then
@@ -72,7 +87,8 @@ if CLIENT then
 	-- a soft mesh, including the short interval before server acknowledgement.
 	hook.Add("PlayerBindPress", "JoltSoftBodyPhysgun", function(owner, bind)
 		local state = inputs[owner]
-		if state and state.captured and (bind == "invnext" or bind == "invprev") then return true end
+		local holding = owner:GetNW2Bool("jolt_softbody_physgun", false) or state and state.captured
+		if holding and (bind == "invnext" or bind == "invprev") then return true end
 	end)
 else
 	for _, event in ipairs({"PlayerDeath", "PlayerDisconnected", "PlayerSwitchWeapon"}) do

@@ -45,9 +45,11 @@ Softness scales edge and bend compliance logarithmically. Inflation sets a ball'
 
 Only the owner or an admin can edit a soft body, subject to CanTool and CPPI, and only one player can drag it at a time. The server redoes the aim trace and checks walls and distance; clients never send vertex numbers or positions. Death, disconnecting, removing the body or reloading Lua ends a drag.
 
-**Regular physics gun**: aim at a soft body within 600 units and hold left click to grab a vertex near the hit point; the rest of the mesh deforms with it. Scroll to adjust distance. Release left click to restore the original pin state, or right-click while holding to pin that point to the world. Unpin it with the workshop's right-click action. Grabbing checks ownership, `CPPICanPhysgun` and `PhysgunPickup`, shares the workshop's exclusive drag lock, and releases on weapon switches.
+**Regular physics gun**: aim within 600 units and hold LMB to grab; scroll adjusts distance. A held beam keeps acquiring after an initial miss, while walls and props block selection. RMB freezes the held point; grabbing that point again and releasing restores its state from before the freeze. Aim at a soft body and press R to release all its non-mounted pins, including creation anchors; explicit mounts stay attached. Grabbing checks ownership, `CPPICanPhysgun` and `PhysgunPickup`, and shares the workshop's exclusive drag lock.
 
-The grabbed point targets arrival in one game physics tick, without the workshop's slower easing coefficient, while respecting the body's configured velocity limit. The holder displays the latest server mesh without the additional spectator interpolation delay and receives snapshots at up to 60 Hz within the existing bandwidth budget. Other players retain interpolated rendering.
+Vertex editing also accepts RMB while holding LMB to freeze the current point without re-picking. Each new mount gets its own Z undo, which follows that mount onto fragments after tearing.
+
+The grabbed point targets arrival in one physics tick while respecting its velocity limit. Holder rendering keeps roughly one received snapshot interval for interpolation, avoiding packet-by-packet jumps. Snapshots remain within the bandwidth budget; spectators retain normal interpolation.
 
 New configurations default to 10 solver iterations. Existing saved settings are preserved; set both server `jolt_softbody_iterations` and tool `jolt_softbody_bodyiterations` to `10`, then create a new soft body to use this value.
 

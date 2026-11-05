@@ -72,8 +72,23 @@ function attachments.Click(owner)
 	record.mounts[vertex] = {
 		owner = owner, target = target, physics = physics, world = trace.HitWorld,
 		position = trace.HitWorld and position or physics:WorldToLocal(position),
-		wasPinned = wasPinned, point = point, velocity = Vector(), nextPermission = 0,
+		wasPinned = wasPinned, point = point, velocity = Vector(), nextPermission = 0, undoToken = {},
 	}
+	local token, family = record.mounts[vertex].undoToken, record.family
+	undo.Create(I.UndoName(I.Token("jolt.mount_points")))
+	undo.AddFunction(function()
+		-- The token survives splitting, but never matches a replacement mount.
+		local records = family and family.records or {[record.id] = record}
+		for _, member in pairs(records) do
+			if api.Server.Records[member.id] == member then
+				for index, mount in pairs(member.mounts or {}) do
+					if mount.undoToken == token then attachments.Detach(member, index) end
+				end
+			end
+		end
+	end)
+	undo.SetPlayer(owner)
+	undo.Finish()
 	record.forceSample = true
 	attachments.Cancel(owner)
 	return true
@@ -95,7 +110,9 @@ end
 
 function attachments.Copy(parent, child, sources)
 	child.mounts = {}
+	child.frozenPins = {}
 	for index, source in ipairs(sources) do
+		if parent.frozenPins then child.frozenPins[index] = parent.frozenPins[source] end
 		local mount = parent.mounts and parent.mounts[source]
 		if mount then
 			local copy = {}

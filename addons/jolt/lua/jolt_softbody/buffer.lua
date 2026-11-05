@@ -79,7 +79,8 @@ function methods:Commit(sequence, time, receivedAt)
 	if receivedAt then
 		-- The two clocks can have unrelated origins. Anchor once at packet arrival;
 		-- then adjust playback speed gently instead of jumping at every packet.
-		local delay = math.max(0.1, self.interval * 1.4 + self.jitter * 2)
+		local delay = self.holding and math.max(1 / 60, self.interval * 1.1 + self.jitter)
+			or math.max(0.1, self.interval * 1.4 + self.jitter * 2)
 		self.playbackDelay = math.min(0.35, self.interval * (config.SnapshotSlots - 1), delay)
 		if not self.clockReady then
 			self.playbackTime, self.clockTime = time - self.playbackDelay, receivedAt
@@ -97,9 +98,16 @@ function methods:Latest()
 	return self.count > 0 and self.slots[self.head] or nil
 end
 
-function methods:Play(now)
+function methods:Play(now, holding)
 	if not self.clockReady then return false, false end
 	advanceClock(self, now)
+	if holding and not self.holding then
+		-- Keep roughly one received interval for interpolation, instead of jumping
+		-- to each packet. The network budget can make packets slower than ticks.
+		local delay = math.max(1 / 60, self.interval * 1.1 + self.jitter)
+		self.playbackTime = math.max(self.playbackTime, self:Latest().time - delay)
+	end
+	self.holding = holding == true
 	return self:Sample(self.playbackTime)
 end
 

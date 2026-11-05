@@ -74,6 +74,12 @@ local function beginDrag(owner, record, vertex, depth, hit, physgun)
 	if api.Attachments then api.Attachments.Detach(record, vertex) end
 	local point = {}
 	if not record.body:ReadVertex(vertex, point) or not record.body:SetVertexPinned(vertex, true) then return end
+	-- A temporary freeze is released by picking that point up again. Preserve
+	-- pins that existed before the user froze it (for example creation anchors).
+	if record.frozenPins and record.frozenPins[vertex] ~= nil then
+		point.pinned = record.frozenPins[vertex]
+		record.frozenPins[vertex] = nil
+	end
 	local drag = {
 		physgun = physgun, held = true,
 		record = record, vertex = vertex, depth = depth, wasPinned = point.pinned, point = point,
@@ -96,16 +102,31 @@ function editing.Begin(owner)
 	return beginDrag(owner, record, vertex, depth, hit, false)
 end
 
+function editing.TracePhysgun(owner, direction)
+	local origin, delta = owner:GetShootPos(), direction * config.EditDistance
+	local trace = util.TraceLine({start = origin, endpos = origin + delta, filter = owner, mask = MASK_SOLID})
+	local obstruction = IsValid(trace.Entity) and trace.Entity.JoltSoftBodyRecord
+	local limit = obstruction and 1 or trace.Fraction or 1
+	local selected, nearest
+	-- Query the native mesh directly; Source's broadphase bounds can lag a moving
+	-- cloth. World and rigid-body hits still cap the selectable distance.
+	for _, record in ipairs(server.Order) do
+		if IsValid(record.entity) and record.body:IsValid() then
+			local hit = record.body:Trace(origin, delta)
+			if hit and hit.Hit and hit.Vertex >= 1 and hit.Fraction >= 0 and hit.Fraction <= limit then
+				selected, nearest, limit = record, hit, hit.Fraction
+			end
+		end
+	end
+	return selected, nearest, trace
+end
+
 function editing.BeginPhysgun(owner, direction)
 	-- Recompute both obstruction and native mesh hit on the server. Client input
 	-- never supplies a record ID, vertex index or target position.
 	if not activePhysgun(owner) or editing.Drags[owner] then return end
-	local origin = owner:GetShootPos()
-	local trace = util.TraceLine({start = origin, endpos = origin + direction * config.EditDistance, filter = owner, mask = MASK_SOLID})
-	local record = IsValid(trace.Entity) and trace.Entity.JoltSoftBodyRecord
+	local record, hit = editing.TracePhysgun(owner, direction)
 	if not record or not canPhysgun(owner, record) then return end
-	local hit = record.body:Trace(origin, direction * config.EditDistance)
-	if not hit or not hit.Hit or hit.Vertex < 1 or hit.Fraction < 0 or hit.Fraction > 1 then return end
 	if hook.Run("PhysgunPickup", owner, record.entity) == false then return end
 	-- Permission hooks may remove the entity or change ownership.
 	if not canPhysgun(owner, record) then return end
@@ -114,26 +135,55 @@ function editing.BeginPhysgun(owner, direction)
 	return drag
 end
 
+function editing.Freeze(owner)
+	local drag = editing.Drags[owner]
+	if not drag then return false end
+	if drag.physgun then
+		if not canPhysgun(owner, drag.record) then return false end
+	elseif not canEdit(owner, drag.record, drag.permission, 2) then return false end
+	local record = drag.record
+	record.frozenPins = record.frozenPins or {}
+	record.frozenPins[drag.vertex] = drag.wasPinned
+	drag.wasPinned = true
+	editing.Release(owner)
+	return true
+end
+
+function editing.UnfreezePhysgun(owner, direction)
+	if not activePhysgun(owner) then return false end
+	local record = editing.TracePhysgun(owner, direction)
+	if not record or not canPhysgun(owner, record) or record.dragOwner then return false end
+	if hook.Run("CanPlayerUnfreeze", owner, record.entity, nil) == false then return false end
+	if not canPhysgun(owner, record) then return false end
+	for vertex = 1, record.geometry.vertexCount do
+		if not (record.mounts and record.mounts[vertex]) then
+			record.body:SetVertexVelocity(vertex, zero)
+			record.body:SetVertexPinned(vertex, false)
+			if record.frozenPins then record.frozenPins[vertex] = nil end
+		end
+	end
+	record.forceSample = true
+	return true
+end
+
 function editing.PhysgunInput(owner, held, wheel, freeze)
 	local drag = editing.Drags[owner]
 	if not drag or not drag.physgun then return end
 	drag.held = held
 	if not held or not activePhysgun(owner) then editing.Release(owner) return end
 	drag.depth = math.Clamp(drag.depth + wheel * 20, 24, config.EditDistance)
-	if freeze and canPhysgun(owner, drag.record) then
-		-- Pin just the grabbed vertex; leave the rest of the mesh simulated.
-		drag.wasPinned = true
-		editing.Release(owner)
-	end
+	if freeze then editing.Freeze(owner) end
 end
 
 function editing.TogglePin(owner)
+	if editing.Drags[owner] then return editing.Freeze(owner) end
 	local record, vertex = editing.Pick(owner, 2)
 	if not record then if vertex then gameplay.Fail(owner, vertex) end return end
 	if record.dragOwner then return gameplay.Fail(owner, I.Phrase("jolt.release_the_vertex_you_are_dragging_first")) end
 	if api.Attachments and api.Attachments.Detach(record, vertex) then return end
 	local point = {}
 	if record.body:ReadVertex(vertex, point) and record.body:SetVertexPinned(vertex, not point.pinned) then
+		if record.frozenPins then record.frozenPins[vertex] = nil end
 		record.forceSample = true
 	end
 end
