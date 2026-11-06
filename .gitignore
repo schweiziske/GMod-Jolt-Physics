@@ -7,6 +7,17 @@ __pycache__/
 # Local upstream research checkouts, not project dependencies
 /work/r6/reference/
 
+# Local contact investigation notes and test backups
+/docs/contact-*.zh-CN.md
+/docs/dupe-*.zh-CN.md
+/docs/fixed-grid-*.zh-CN.md
+/docs/large-building-rollback.zh-CN.md
+/docs/persistent-contact-geometry.zh-CN.md
+/docs/physics-key-parser-issue-*.zh-CN.md
+/docs/retained-contact-audit-*.zh-CN.md
+/tests/native/contacts/
+/tests/lua/
+
 # Windows Stuff
 *.vcxproj
 *.sln

@@ -30,7 +30,7 @@ The default (public) branch and the `x86-64` beta branch both have a 64-bit buil
 
 ## Features
 
-How GMod Jolt Physics compares with the original VPhysics and with Volt.
+How GMod Jolt Physics compares with the original VPhysics and with Volt. For the specific differences, see [Differences from upstream](docs/project-differences.md).
 
 | Feature | VPhysics | Volt | GMod Jolt Physics |
 | :--- | :---: | :---: | :---: |
@@ -77,6 +77,9 @@ git clone --recurse-submodules https://github.com/schweiziske/GMod-Jolt-Physics.
 - [Physics API](docs/physics-api.md): use the extra features from Lua or C++.
 - [Feature export example](examples/physics/export/README.md): expose new Jolt functionality, from the backend all the way to Lua.
 - [Backend code map](vphysics_jolt/README.md): where each part of the physics backend lives, and the rules for changing it.
+- [Differences from upstream](docs/project-differences.md): compatibility work, solver integration, new features and the SDK in this repository.
+
+This project was developed with the help of AI coding tools, for both code and documentation. Most changes were proposed, reviewed and tested by the maintainer, who takes responsibility for the project as a whole.
 
 ## Reporting bugs
 

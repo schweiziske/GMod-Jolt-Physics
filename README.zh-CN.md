@@ -30,7 +30,7 @@ GMod Jolt Physics 用 [Jolt Physics](https://github.com/jrouwe/JoltPhysics) 替�
 
 ## 功能
 
-下表对比原版 VPhysics、Volt 和 GMod Jolt Physics。
+下表对比原版 VPhysics、Volt 和 GMod Jolt Physics，具体区别见[与上游的区别](docs/project-differences.zh-CN.md)。
 
 | 功能 | VPhysics | Volt | GMod Jolt Physics |
 | :--- | :---: | :---: | :---: |
@@ -77,6 +77,9 @@ git clone --recurse-submodules https://github.com/schweiziske/GMod-Jolt-Physics.
 - [物理 API](docs/physics-api.zh-CN.md)：在 Lua 或 C++ 中使用额外玩法的能力。
 - [功能导出示例](examples/physics/export/README.zh-CN.md)：把新的 Jolt 能力从后端一路导出到 Lua。
 - [后端代码导航](vphysics_jolt/README.zh-CN.md)：物理后端各部分的位置，以及修改时要遵守的约定。
+- [与上游的区别](docs/project-differences.zh-CN.md)：公开仓库的兼容改造、求解器集成、新增玩法与 SDK。
+
+本项目的代码和文档在开发过程中使用了 AI 编程工具辅助。大部分改动由维护者提出、审查和测试，项目整体由维护者负责。
 
 ## 问题反馈
 
