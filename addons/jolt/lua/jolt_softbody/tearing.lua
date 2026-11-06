@@ -45,7 +45,7 @@ function tearing.Cut(owner)
 	owner.JoltNextSoftCut = CurTime() + 0.3
 	local record, vertex = api.Editing.Pick(owner, 1)
 	if not record then if vertex then gameplay.Fail(owner, vertex) end return end
-	if record.dragOwner and record.dragOwner ~= owner then return gameplay.Fail(owner, I.Phrase("jolt.another_player_is_dragging_this_soft_body")) end
+	if api.Editing.IsDragging(record, owner) then return gameplay.Fail(owner, I.Phrase("jolt.another_player_is_dragging_this_soft_body")) end
 	local mesh = record.geometry
 	if not mesh.columns then return gameplay.Fail(owner, I.Phrase("jolt.cut_interior_seam")) end
 	local seam = math.floor((vertex - 1) / mesh.columns) + mesh.rowFrom

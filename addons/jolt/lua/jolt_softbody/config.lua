@@ -40,7 +40,7 @@ config.Materials = {
 	{label = "jolt.material_foam", values = {softness = 85, bodydamping = 0.35, bodyfriction = 0.5,
 		bodyrestitution = 0, dihedral = 0, plasticyield = 0.15, plasticcreep = 2, plasticstrain = 0.6, tearstrain = 80}},
 	{label = "jolt.material_foil", values = {softness = 10, bodydamping = 0.3, bodyfriction = 0.4,
-		bodyrestitution = 0, dihedral = 1, plasticyield = 0.03, plasticcreep = 8, plasticstrain = 0.85, tearstrain = 30}},
+		bodyrestitution = 0, dihedral = 0, plasticyield = 0.03, plasticcreep = 8, plasticstrain = 0.85, tearstrain = 30}},
 }
 
 function config.Rows(kind, quality)

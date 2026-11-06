@@ -3,6 +3,12 @@ local api = JoltSoftBodies
 local config, geometry, protocol = api.Config, api.Geometry, api.Protocol
 local gameplay = include("jolt_gameplay/server.lua")
 local server = {Records = {}, Order = {}, VertexCount = 0}
+local originalSanitize = config.Sanitize
+config.Sanitize = function(input)
+	local settings = originalSanitize(input)
+	if settings.material == 5 then settings.dihedral = false end
+	return settings
+end
 local nextID = _G.JoltSoftBodyNextID or 1
 local limit = CreateConVar("sbox_maxjolt_softbodies", "16", FCVAR_ARCHIVE, "Soft bodies per player", 0, 128)
 local recordLimit = CreateConVar("jolt_softbody_maxrecords", "256", FCVAR_ARCHIVE, "Maximum live soft bodies", 0, 256)
@@ -103,9 +109,10 @@ end
 
 function server.SpawnPrepared(owner, settings, position, angles, velocity)
 	if not IsValid(owner) or not owner:Alive() then return end
-	-- The foil preset's angular bending can make tubular rope meshes diverge.
-	-- Check the actual bend mode too, since custom presets can retain it.
-	if settings.kind == 3 and (settings.material == 5 or settings.dihedral == true) then
+	-- Angular bending diverges on narrow/light meshes, even without plasticity.
+	-- Enforce the stable foil mode here too: existing clients retain old convars.
+	if settings.material == 5 then settings.dihedral = false end
+	if settings.kind == 3 and settings.dihedral == true then
 		return nil, I.Phrase("jolt.softbody_rope_foil_disabled")
 	end
 	local mesh = geometry.Generate(settings)
@@ -328,8 +335,8 @@ local function think()
 		elseif now >= record.nextSample or record.forceSample then
 			local ok = server.Sample(record, now, record.forceSample)
 			record.forceSample = false
-			local drag = api.Editing and api.Editing.Drags[record.dragOwner]
-			record.nextSample = now + (drag and drag.physgun and engine.TickInterval() or config.NearInterval)
+			local held = api.Editing and api.Editing.IsDragging(record, nil, true)
+			record.nextSample = now + (held and engine.TickInterval() or config.NearInterval)
 			if not ok then record.entity:Remove() end
 		end
 	end

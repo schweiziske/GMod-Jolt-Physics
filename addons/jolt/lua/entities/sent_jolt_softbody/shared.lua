@@ -20,11 +20,15 @@ end
 -- the separately streamed mesh metadata arrives. Keep tool/weapon traces solid.
 hook.Add("ShouldCollide", "JoltSoftBodyPlayerCollision", function(first, second)
 	if not IsValid(first) or not IsValid(second) then return end
+	local body
 	if first:GetClass() == "sent_jolt_softbody" and second:IsPlayer() then
-		if not first:GetPlayerCollision() then return false end
+		body = first
 	elseif second:GetClass() == "sent_jolt_softbody" and first:IsPlayer() then
-		if not second:GetPlayerCollision() then return false end
+		body = second
 	end
+	-- Collision hooks can see an entity before its datatable accessors exist
+	-- (including during scripted-entity reloads). Wait for initialization.
+	if body and body.GetPlayerCollision and not body:GetPlayerCollision() then return false end
 end)
 
 function ENT:TestCollision(start, delta, isBox, extents, mask)

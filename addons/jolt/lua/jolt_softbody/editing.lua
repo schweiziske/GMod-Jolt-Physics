@@ -14,7 +14,8 @@ end
 local function canPhysgun(owner, record)
 	if not activePhysgun(owner) or not IsValid(record.entity) or not record.body:IsValid() then return false end
 	if record.entity.PhysgunDisabled then return false end
-	if record.owner ~= owner and not owner:IsAdmin() then return false end
+	-- Let CPPI and PhysgunPickup decide access, as they do for ordinary props.
+	-- A creator-only gate would also reject friends explicitly allowed by CPPI.
 	return not record.entity.CPPICanPhysgun or record.entity:CPPICanPhysgun(owner) ~= false
 end
 
@@ -51,7 +52,7 @@ function editing.Release(owner)
 	if not drag then return end
 	editing.Drags[owner] = nil
 	local record = drag.record
-	record.dragOwner = nil
+	if record.dragVertices then record.dragVertices[drag.vertex] = nil end
 	if record.body:IsValid() then
 		record.body:SetVertexVelocity(drag.vertex, zero)
 		record.body:SetVertexPinned(drag.vertex, drag.wasPinned)
@@ -66,11 +67,23 @@ function editing.Release(owner)
 end
 
 function editing.ReleaseRecord(record)
-	if record.dragOwner then editing.Release(record.dragOwner) end
+	for owner, drag in pairs(editing.Drags) do
+		if drag.record == record then editing.Release(owner) end
+	end
+end
+
+function editing.IsDragging(record, exceptOwner, physgunOnly)
+	for _, owner in pairs(record.dragVertices or {}) do
+		local drag = editing.Drags[owner]
+		if owner ~= exceptOwner and drag and (not physgunOnly or drag.physgun) then return true end
+	end
+	return false
 end
 
 local function beginDrag(owner, record, vertex, depth, hit, physgun)
-	if record.dragOwner then return gameplay.Fail(owner, I.Phrase("jolt.another_player_is_dragging_this_soft_body")) end
+	if record.dragVertices and record.dragVertices[vertex] then
+		return gameplay.Fail(owner, I.Phrase("jolt.softbody_vertex_held"))
+	end
 	if api.Attachments then api.Attachments.Detach(record, vertex) end
 	local point = {}
 	if not record.body:ReadVertex(vertex, point) or not record.body:SetVertexPinned(vertex, true) then return end
@@ -87,7 +100,10 @@ local function beginDrag(owner, record, vertex, depth, hit, physgun)
 		velocity = Vector(), permission = hit, nextPermission = 0,
 		trace = {start = Vector(), endpos = Vector(), filter = {owner, record.entity}, mask = MASK_SOLID, output = {}},
 	}
-	editing.Drags[owner], record.dragOwner = drag, owner
+	local radius = math.max(0.5, record.settings.vertexRadius or 0.5)
+	drag.trace.mins, drag.trace.maxs = Vector(-radius, -radius, -radius), Vector(radius, radius, radius)
+	record.dragVertices = record.dragVertices or {}
+	editing.Drags[owner], record.dragVertices[vertex] = drag, owner
 	record.forceSample = true
 	owner:SetNW2Int("jolt_softbody_drag_id", record.id)
 	owner:SetNW2Int("jolt_softbody_drag_vertex", vertex)
@@ -152,11 +168,11 @@ end
 function editing.UnfreezePhysgun(owner, direction)
 	if not activePhysgun(owner) then return false end
 	local record = editing.TracePhysgun(owner, direction)
-	if not record or not canPhysgun(owner, record) or record.dragOwner then return false end
+	if not record or not canPhysgun(owner, record) then return false end
 	if hook.Run("CanPlayerUnfreeze", owner, record.entity, nil) == false then return false end
 	if not canPhysgun(owner, record) then return false end
 	for vertex = 1, record.geometry.vertexCount do
-		if not (record.mounts and record.mounts[vertex]) then
+		if not (record.mounts and record.mounts[vertex]) and not (record.dragVertices and record.dragVertices[vertex]) then
 			record.body:SetVertexVelocity(vertex, zero)
 			record.body:SetVertexPinned(vertex, false)
 			if record.frozenPins then record.frozenPins[vertex] = nil end
@@ -179,7 +195,7 @@ function editing.TogglePin(owner)
 	if editing.Drags[owner] then return editing.Freeze(owner) end
 	local record, vertex = editing.Pick(owner, 2)
 	if not record then if vertex then gameplay.Fail(owner, vertex) end return end
-	if record.dragOwner then return gameplay.Fail(owner, I.Phrase("jolt.release_the_vertex_you_are_dragging_first")) end
+	if record.dragVertices and record.dragVertices[vertex] then return gameplay.Fail(owner, I.Phrase("jolt.release_the_vertex_you_are_dragging_first")) end
 	if api.Attachments and api.Attachments.Detach(record, vertex) then return end
 	local point = {}
 	if record.body:ReadVertex(vertex, point) and record.body:SetVertexPinned(vertex, not point.pinned) then
@@ -238,12 +254,22 @@ local function moveVertex(owner, drag, now)
 	trace.start:SetUnpacked(origin.x, origin.y, origin.z)
 	trace.endpos:SetUnpacked(origin.x + direction.x * drag.depth + drag.offsetX,
 		origin.y + direction.y * drag.depth + drag.offsetY, origin.z + direction.z * drag.depth + drag.offsetZ)
-	util.TraceLine(trace)
+	util.TraceHull(trace)
 	local target = trace.output.Hit and trace.output.HitPos or trace.endpos
 	local x, y, z = target.x, target.y, target.z
 	if trace.output.Hit then
 		local normal = trace.output.HitNormal
 		x, y, z = x + normal.x * 3, y + normal.y * 3, z + normal.z * 3
+	end
+	-- A grabbed vertex is pinned, so Jolt deliberately skips its collisions.
+	-- Sweep its actual path as well as the aim ray; rotating the view can put
+	-- both aim endpoints in free space while the vertex crosses a wall/floor.
+	trace.start:SetUnpacked(point.x, point.y, point.z)
+	trace.endpos:SetUnpacked(x, y, z)
+	util.TraceHull(trace)
+	if trace.output.Hit and not trace.output.StartSolid then
+		local hit, normal = trace.output.HitPos, trace.output.HitNormal
+		x, y, z = hit.x + normal.x * 3, hit.y + normal.y * 3, hit.z + normal.z * 3
 	end
 	-- A physgun target is reached in one simulation tick, rather than following
 	-- the workshop's exponential easing. Respect the body's native velocity limit.

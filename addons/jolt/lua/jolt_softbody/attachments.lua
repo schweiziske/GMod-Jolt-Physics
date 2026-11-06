@@ -36,14 +36,14 @@ function attachments.Click(owner)
 	if not pending then
 		local record, vertex = api.Editing.Pick(owner, 1)
 		if not record then if vertex then gameplay.Fail(owner, vertex) end return end
-		if record.dragOwner then return gameplay.Fail(owner, I.Phrase("jolt.release_the_vertex_you_are_dragging_first")) end
+		if record.dragVertices and record.dragVertices[vertex] then return gameplay.Fail(owner, I.Phrase("jolt.release_the_vertex_you_are_dragging_first")) end
 		attachments.Pending[owner] = {record = record, vertex = vertex}
 		owner:SetNW2Int("jolt_softbody_mount_id", record.id)
 		owner:SetNW2Int("jolt_softbody_mount_vertex", vertex)
 		return true
 	end
 	local record, vertex = pending.record, pending.vertex
-	if api.Server.Records[record.id] ~= record or record.dragOwner
+	if api.Server.Records[record.id] ~= record or (record.dragVertices and record.dragVertices[vertex])
 		or (record.owner ~= owner and not owner:IsAdmin()) then attachments.Cancel(owner) return end
 	local origin = owner:GetShootPos()
 	local trace = util.TraceLine({start = origin, endpos = origin + owner:GetAimVector() * api.Config.EditDistance,
@@ -109,7 +109,7 @@ function attachments.Unmount(owner)
 	if attachments.Pending[owner] then attachments.Cancel(owner) return end
 	local record, vertex = api.Editing.Pick(owner, 2)
 	if not record then if vertex then gameplay.Fail(owner, vertex) end return end
-	if not record.dragOwner then attachments.Detach(record, vertex) end
+	if not (record.dragVertices and record.dragVertices[vertex]) then attachments.Detach(record, vertex) end
 end
 
 function attachments.ReleaseRecord(record)
