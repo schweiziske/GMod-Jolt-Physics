@@ -358,6 +358,7 @@ return {
     ["jolt.material_foil"] = "Thin metal / foil",
     ["jolt.softbody_rope_foil_disabled"] = "Angular bending is temporarily disabled for soft ropes. Turn off angular bending and try again.",
     ["jolt.softbody_vertex_held"] = "Another player is holding this point. Grab a different point.",
+    ["jolt.softbody_dll_outdated"] = "Soft-body DLL outdated or missing. Update the server DLL: https://github.com/schweiziske/GMod-Jolt-Physics/releases",
     ["jolt.material_preset_help"] = "Presets fill the controls below; you can still adjust them. Automatic tearing is opt-in and cuts cross-sections. Server caps apply. Settings affect new bodies.",
     ["jolt.dihedral_bending"] = "Angular bending (shells / foil)",
     ["jolt.plastic_yield"] = "Permanent deformation: yield strain",

@@ -358,6 +358,7 @@ return {
     ["jolt.material_foil"] = "薄金属／铝箔",
     ["jolt.softbody_rope_foil_disabled"] = "软绳暂不支持角度弯曲，请关闭角度弯曲后重试。",
     ["jolt.softbody_vertex_held"] = "这个点正被其他玩家抓住，请抓另一个位置。",
+    ["jolt.softbody_dll_outdated"] = "软体 DLL 已过期或缺失（DLL outdated），请更新服务器 DLL：https://github.com/schweiziske/GMod-Jolt-Physics/releases",
     ["jolt.material_preset_help"] = "预设会填入下方参数，仍可自行调整。自动撕裂需手动勾选，沿横截面断开。受服务器参数上限约束，设置用于新建软体。",
     ["jolt.dihedral_bending"] = "角度弯曲约束（薄壳／铝箔）",
     ["jolt.plastic_yield"] = "永久变形：屈服应变",

@@ -16,6 +16,11 @@ using namespace GarrysMod::Lua;
 
 namespace
 {
+constexpr char kSoftBodyBuildVersion[] = "2026.11.06.2";
+}
+
+namespace
+{
 using namespace JoltSoftBodyLua;
 
 IVJoltSoftBodyBridge *g_Bridge = nullptr;
@@ -105,6 +110,12 @@ LUA_FUNCTION_STATIC( GetVersion )
 	{
 		LUA->PushNil();
 	}
+	return 1;
+}
+
+LUA_FUNCTION_STATIC( GetBuildVersion )
+{
+	LUA->PushString( kSoftBodyBuildVersion );
 	return 1;
 }
 
@@ -556,6 +567,7 @@ GMOD_MODULE_OPEN()
 	LUA->CreateTable();
 	RegisterFunction( LUA, "Available", Available );
 	RegisterFunction( LUA, "GetVersion", GetVersion );
+	RegisterFunction( LUA, "GetBuildVersion", GetBuildVersion );
 	RegisterFunction( LUA, "GetLimits", GetLimits );
 	RegisterFunction( LUA, "Create", Create );
 	// The binding understands the option; older backends reject its creation flag.

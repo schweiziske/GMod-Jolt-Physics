@@ -1,6 +1,7 @@
 local I = JoltI18n or include("jolt_i18n/init.lua")
 local config = {
 	Protocol = 2,
+	Version = "2026.11.06.2",
 	MetaMessage = "jolt_softbody_meta_v2",
 	SnapshotMessage = "jolt_softbody_frame_v2",
 	RemoveMessage = "jolt_softbody_remove_v2",

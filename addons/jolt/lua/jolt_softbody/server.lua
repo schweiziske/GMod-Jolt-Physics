@@ -135,8 +135,14 @@ function server.SpawnPrepared(owner, settings, position, angles, velocity)
 		return nil, I.Phrase("jolt.the_server_s_soft_body_vertex_budget_is_exhausted_lower_quality_or_r")
 	end
 	if nextID > 2147483647 then return nil, I.Phrase("jolt.soft_body_ids_exhausted_change_the_map") end
-	local native, reason = gameplay.LoadFeature("softbody")
-	if not native then return nil, reason end
+	local native = gameplay.LoadFeature("softbody")
+	if not native then return nil, I.Phrase("jolt.softbody_dll_outdated") end
+	local getBuildVersion = native.GetBuildVersion
+	local versionOK, version = false, nil
+	if type(getBuildVersion) == "function" then versionOK, version = pcall(getBuildVersion) end
+	if not versionOK or version ~= config.Version then
+		return nil, I.Phrase("jolt.softbody_dll_outdated")
+	end
 	local vertices, triangles = nativeMesh(mesh, settings.mass)
 	local softness = settings.softness / 100
 	settings.maxVelocity = math.Clamp(settings.maxVelocity or maxVelocity:GetFloat(), 1, maxVelocity:GetFloat())
