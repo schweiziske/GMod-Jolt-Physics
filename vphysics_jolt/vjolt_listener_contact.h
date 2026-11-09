@@ -579,9 +579,7 @@ public:
 		JoltPhysicsObject* pObject1 = reinterpret_cast<JoltPhysicsObject*>( inBody1.GetUserData() );
 		JoltPhysicsObject* pObject2 = reinterpret_cast<JoltPhysicsObject*>( inBody2.GetUserData() );
 		ioSettings.mVPhysicsUseNativeContactTuning =
-			!( ( pObject1->GetCallbackFlags() | pObject2->GetCallbackFlags() ) & CALLBACK_IS_PLAYER_CONTROLLER )
-			&& ( VJoltDebugForceNativeContactTuning()
-				|| ( !pObject1->HasConstraintAttachments() && !pObject2->HasConstraintAttachments() ) );
+			!( ( pObject1->GetCallbackFlags() | pObject2->GetCallbackFlags() ) & CALLBACK_IS_PLAYER_CONTROLLER );
 		ApplyHeavyOnLightContactScaling( inBody1, inBody2, inManifold, ioSettings );
 		ApplySurfaceMaterialSemantics( inBody1, inBody2, inManifold,
 			pObject1, pObject2, ioSettings );
@@ -599,12 +597,14 @@ public:
 		ApplyPlayerContactSemantics( pObject1, pObject2, inManifold, ioSettings, true );
 		ApplySevereInterpenetrationSemantics(
 			pObject1, pObject2, inManifold, normalVelocity, ioSettings );
-		// Constrained Source bodies retain IVP/Havana tangential friction semantics,
-		// while Jolt keeps the normal contact and penetration solve. This is generic
-		// and does not identify simfphys or any vehicle type.
+		// Ragdoll parts use native friction while settling against native floor
+		// contacts. Other constrained Source bodies retain compatibility friction.
 		ioSettings.mVPhysicsUseLegacyFriction = !bPlayerContact
 			&& !ioSettings.mIsSensor
-			&& !ioSettings.mVPhysicsUseNativeContactTuning;
+			&& ( !ioSettings.mVPhysicsUseNativeContactTuning
+				|| ( !VJoltDebugForceNativeContactTuning()
+					&& ( ( pObject1->HasConstraintAttachments() && !( pObject1->GetGameFlags() & FVPHYSICS_PART_OF_RAGDOLL ) )
+						|| ( pObject2->HasConstraintAttachments() && !( pObject2->GetGameFlags() & FVPHYSICS_PART_OF_RAGDOLL ) ) ) ) );
 		ApplyGamePenetrationSemantics( inBody1, inBody2, pObject1, pObject2, inManifold, ioSettings );
 		// Player contacts keep their own startup and impact semantics.
 		ioSettings.mVPhysicsRevivedContact = !bPlayerContact && !ioSettings.mIsSensor
@@ -677,9 +677,7 @@ public:
 		JoltPhysicsObject* pObject1 = reinterpret_cast<JoltPhysicsObject*>( inBody1.GetUserData() );
 		JoltPhysicsObject* pObject2 = reinterpret_cast<JoltPhysicsObject*>( inBody2.GetUserData() );
 		ioSettings.mVPhysicsUseNativeContactTuning =
-			!( ( pObject1->GetCallbackFlags() | pObject2->GetCallbackFlags() ) & CALLBACK_IS_PLAYER_CONTROLLER )
-			&& ( VJoltDebugForceNativeContactTuning()
-				|| ( !pObject1->HasConstraintAttachments() && !pObject2->HasConstraintAttachments() ) );
+			!( ( pObject1->GetCallbackFlags() | pObject2->GetCallbackFlags() ) & CALLBACK_IS_PLAYER_CONTROLLER );
 		ApplyHeavyOnLightContactScaling( inBody1, inBody2, inManifold, ioSettings );
 		ApplySurfaceMaterialSemantics( inBody1, inBody2, inManifold,
 			pObject1, pObject2, ioSettings );
@@ -701,7 +699,10 @@ public:
 			pObject1, pObject2, inManifold, normalVelocity, ioSettings );
 		ioSettings.mVPhysicsUseLegacyFriction = !bPlayerContact
 			&& !ioSettings.mIsSensor
-			&& !ioSettings.mVPhysicsUseNativeContactTuning;
+			&& ( !ioSettings.mVPhysicsUseNativeContactTuning
+				|| ( !VJoltDebugForceNativeContactTuning()
+					&& ( ( pObject1->HasConstraintAttachments() && !( pObject1->GetGameFlags() & FVPHYSICS_PART_OF_RAGDOLL ) )
+						|| ( pObject2->HasConstraintAttachments() && !( pObject2->GetGameFlags() & FVPHYSICS_PART_OF_RAGDOLL ) ) ) ) );
 		ApplyGamePenetrationSemantics( inBody1, inBody2, pObject1, pObject2, inManifold, ioSettings );
 		if ( VJoltPlayerSupportStartupTraceEnabled()
 			&& ioSettings.mVPhysicsPlayerSupportStartupContact )

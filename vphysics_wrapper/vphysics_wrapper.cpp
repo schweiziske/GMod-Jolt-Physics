@@ -14,6 +14,10 @@
 
 #ifdef _WIN32
 #include <intrin.h>
+#ifdef _WIN64
+#include <windows.h>
+#include <cstring>
+#endif
 #else
 #include <cpuid.h>
 #endif
@@ -136,6 +140,32 @@ bool PhysicsWrapper::InitWrapper()
 		return true;
 
 	const char *pModuleName = GetModuleFromCPULevel( GetCPULevel() );
+
+#ifdef _WIN64
+	// The SDK first searches <working directory>/bin for bare module names,
+	// even when this 64-bit wrapper was loaded from bin/win64. Resolve the
+	// backend beside this wrapper so an older root-bin DLL cannot take priority.
+	HMODULE wrapperModule = nullptr;
+	if ( !GetModuleHandleExA( GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+		reinterpret_cast<LPCSTR>( &s_PhysicsInterface ), &wrapperModule ) )
+		return false;
+	char modulePath[MAX_PATH];
+	const DWORD pathLength = GetModuleFileNameA( wrapperModule, modulePath, sizeof( modulePath ) );
+	if ( pathLength == 0 || pathLength >= sizeof( modulePath ) )
+		return false;
+	char *separator = std::strrchr( modulePath, '\\' );
+	char *forwardSeparator = std::strrchr( modulePath, '/' );
+	if ( forwardSeparator && ( !separator || forwardSeparator > separator ) )
+		separator = forwardSeparator;
+	if ( !separator )
+		return false;
+	const size_t directoryLength = size_t( separator + 1 - modulePath );
+	const size_t nameLength = std::strlen( pModuleName );
+	if ( directoryLength + nameLength >= sizeof( modulePath ) )
+		return false;
+	std::memcpy( separator + 1, pModuleName, nameLength + 1 );
+	pModuleName = modulePath;
+#endif
 
 	if ( !Sys_LoadInterface( pModuleName, VPHYSICS_INTERFACE_VERSION, &m_pActualPhysicsModule, (void **)&m_pActualPhysicsInterface ) )
 		return false;

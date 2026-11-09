@@ -268,6 +268,9 @@ void JoltPhysicsConstraint::SetAngularMotor( float rotSpeed, float maxAngularImp
 		if ( m_ConstraintType == CONSTRAINT_RAGDOLL && rotSpeed == 0.0f )
 			static_cast< JPH::HavanaConstraint * >( m_pConstraint.GetPtr() )->SetRagdollFriction(
 				fabsf( DEG2RAD( maxAngularImpulse ) ) );
+		else if ( m_ConstraintType == CONSTRAINT_HINGE )
+			static_cast< JPH::HavanaConstraint * >( m_pConstraint.GetPtr() )->SetHingeMotor(
+				DEG2RAD( rotSpeed ), fabsf( DEG2RAD( maxAngularImpulse ) ) );
 		return;
 	}
 
@@ -519,7 +522,10 @@ void JoltPhysicsConstraint::InitialiseRagdoll( IPhysicsConstraintGroup *pGroup, 
 		ragdoll.constraintToReference, pRefBody->GetShape()->GetCenterOfMass() );
 	settings.mFrame2 = BuildHavanaRagdollFrame(
 		ragdoll.constraintToAttached, pAttBody->GetShape()->GetCenterOfMass() );
-	settings.mTau = 1.0f;
+	// A full-frame Havana correction fights native floor contacts in grouped
+	// ragdolls. Use Jolt's usual 0.2 correction fraction for their positional
+	// rows, retaining angular limits and standalone constraint behavior.
+	settings.mTau = pGroup && !ragdoll.onlyAngularLimits ? 0.2f : 1.0f;
 	settings.mStrength = 1.0f;
 	settings.mRagdollUseClockwiseRotations = ragdoll.useClockwiseRotations;
 	settings.mRagdollConstrainTranslation = !ragdoll.onlyAngularLimits;
@@ -621,8 +627,9 @@ void JoltPhysicsConstraint::InitialiseHingeInternal(
 	JPH::Body *refBody = m_pObjReference->GetBody();
 	JPH::Body *attBody = m_pObjAttached->GetBody();
 
-	JPH::HingeConstraintSettings settings;
-	settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
+	JPH::HavanaConstraintSettings settings;
+	settings.mKind = JPH::EHavanaConstraintKind::Hinge;
+	settings.mTau = hinge.constraint.strength;
 
 	const JPH::Mat44 referenceObjectToWorld = JPH::Mat44::sRotationTranslation(
 		refBody->GetRotation(), JPH::Vec3( refBody->GetPosition() ) );
@@ -641,29 +648,34 @@ void JoltPhysicsConstraint::InitialiseHingeInternal(
 		attachedPerpAxisObject,
 		refBody->GetShape()->GetCenterOfMass(),
 		attBody->GetShape()->GetCenterOfMass() );
-	settings.mPoint1 = frames.m_PointReferenceCOM;
-	settings.mHingeAxis1 = frames.m_HingeAxisReferenceCOM;
-	settings.mNormalAxis1 = frames.m_NormalAxisReferenceCOM;
-	settings.mPoint2 = frames.m_PointAttachedCOM;
-	settings.mHingeAxis2 = frames.m_HingeAxisAttachedCOM;
-	settings.mNormalAxis2 = frames.m_NormalAxisAttachedCOM;
+	const auto buildFrame = []( JPH::Vec3Arg point, JPH::Vec3Arg axis, JPH::Vec3Arg normal )
+	{
+		return JPH::Mat44( JPH::Vec4( JPH::HavanaFromSourceVector( axis ), 0 ),
+			JPH::Vec4( JPH::HavanaFromSourceVector( normal ), 0 ),
+			JPH::Vec4( JPH::HavanaFromSourceVector( axis.Cross( normal ) ), 0 ),
+			JPH::Vec4( JPH::HavanaFromSourceVector( point ), 1 ) );
+	};
+	settings.mFrame1 = buildFrame( frames.m_PointReferenceCOM,
+		frames.m_HingeAxisReferenceCOM, frames.m_NormalAxisReferenceCOM );
+	settings.mFrame2 = buildFrame( frames.m_PointAttachedCOM,
+		frames.m_HingeAxisAttachedCOM, frames.m_NormalAxisAttachedCOM );
 
 	if ( hinge.hingeAxis.minRotation != hinge.hingeAxis.maxRotation )
 	{
-		settings.mLimitsMin = DEG2RAD( -hinge.hingeAxis.maxRotation );
-		settings.mLimitsMax = DEG2RAD( -hinge.hingeAxis.minRotation );
+		settings.mHingeLimitEnabled = true;
+		settings.mHingeLimitMin = DEG2RAD( hinge.hingeAxis.minRotation );
+		settings.mHingeLimitMax = DEG2RAD( hinge.hingeAxis.maxRotation );
 	}
 
 	// Source's hinge adapter explicitly uses DEG2RAD for this legacy motor/friction limit.
 	const float maxFrictionTorque = fabsf( DEG2RAD( hinge.hingeAxis.torque ) );
+	settings.mHingeMotorVelocity = DEG2RAD( hinge.hingeAxis.angularVelocity );
+	settings.mHingeMotorForce = maxFrictionTorque;
 
 	m_pConstraint = settings.Create( *refBody, *attBody );
 	m_pConstraint->SetLegacyVelocitySolverSettings( hinge.constraint.strength, 1.0f );
 	m_pConstraint->SetLegacyBreakLimits( m_LinearBreakImpulse, m_AngularBreakImpulse );
 	m_pConstraint->SetEnabled( !pGroup && hinge.constraint.isActive );
-
-	static_cast< JPH::HingeConstraint * >( m_pConstraint.GetPtr() )->SetLegacyMotor(
-		DEG2RAD( hinge.hingeAxis.angularVelocity ), maxFrictionTorque );
 
 	RegisterWithPhysicsSystem();
 }

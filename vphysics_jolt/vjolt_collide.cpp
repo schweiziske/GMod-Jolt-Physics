@@ -1012,6 +1012,13 @@ CPhysConvex *JoltPhysicsCollision::ConvexFromVerts( Vector **pVerts, int vertCou
 
 	JPH::ConvexHullShapeSettings settings( verts.get(), vertCount, kMaxConvexRadius, nullptr /* material */ );
 	settings.mHullTolerance = 0.0f;
+	// Generated gib meshes can contain nearly coplanar rounded points. Keep
+	// exact hulls when successful, then retry failed builds at Jolt's default tolerance.
+	if ( settings.Create().HasError() )
+	{
+		JPH::ConvexHullShapeSettings retry( verts.get(), vertCount, kMaxConvexRadius, nullptr );
+		return ShapeSettingsToPhysConvex( retry );
+	}
 	return ShapeSettingsToPhysConvex( settings );
 }
 

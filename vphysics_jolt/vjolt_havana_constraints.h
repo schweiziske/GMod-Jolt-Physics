@@ -24,6 +24,7 @@ enum class EHavanaConstraintKind : uint8
 	Fixed,
 	Length,
 	Ragdoll,
+	Hinge,
 };
 
 /// Source coordinates and Havana/IVP coordinates use different Y/Z conventions. Jolt is kept in
@@ -64,6 +65,14 @@ public:
 	Vec3 mRagdollMotorForce = Vec3::sZero();
 	bool mRagdollUseClockwiseRotations = false;
 	bool mRagdollConstrainTranslation = true;
+
+	/// Hinge frames store the hinge axis in X and its reference normal in Y.
+	/// Unlike ragdoll frames, their columns are vectors in Havana body-COM space.
+	bool mHingeLimitEnabled = false;
+	float mHingeLimitMin = 0.0f;
+	float mHingeLimitMax = 0.0f;
+	float mHingeMotorVelocity = 0.0f;
+	float mHingeMotorForce = 0.0f;
 
 protected:
 	void RestoreBinaryState( StreamIn &stream ) override;
@@ -111,6 +120,7 @@ public:
 
 	EHavanaConstraintKind GetHavanaKind() const { return mSettings.mKind; }
 	void SetRagdollFriction( float maxAngularImpulse );
+	void SetHingeMotor( float angularVelocity, float maxAngularForce );
 	void UpdateRagdollTransforms( Mat44Arg frame1Havana, Mat44Arg frame2Havana );
 	Mat44 GetOriginalRagdollFrame1() const { return mOriginalRagdollFrame1; }
 	Mat44 GetOriginalRagdollFrame2() const { return mOriginalRagdollFrame2; }
@@ -153,21 +163,27 @@ private:
 		Mat44 mInverseInertiaHavana2 { Mat44::sZero() };
 	};
 
-	// A distant weld couples translation and rotation. Forming and inverting that
-	// 6x6 matrix in float can erase its translational mass and inject kinetic energy.
-	// Keep the factorization and impulse cancellation in double, not the bodies.
-	struct FixedJacobianSystem : JacobianSystem< 6 >
+	// Coupled point/angular rows can carry opposing impulses. Keep their mass
+	// factorization and impulse cancellation in double when requested. Fixed6
+	// retains its adaptive precision; Hinge5 uses this path for every solve.
+	template <uint N>
+	struct PreciseJacobianSystem : JacobianSystem< N >
 	{
-		double mLDLT[6][6];
-		double mInverseDiagonal[6];
+		using JacobianSystem< N >::mRows;
+		using JacobianSystem< N >::mValid;
+		using JacobianSystem< N >::mEffectiveMass;
+		using JacobianSystem< N >::GetVelocity;
+		using JacobianSystem< N >::ApplyImpulse;
+		double mLDLT[N][N];
+		double mInverseDiagonal[N];
 		// Share one symmetric inertia operator between factorization and application.
 		double mInverseInertia1[3][3];
 		double mInverseInertia2[3][3];
 		bool mPrecise = false;
 
 		bool Setup( const Body &body1, const Body &body2, float inverseMass1, float inverseMass2,
-			Mat44Arg inverseInertia1, Mat44Arg inverseInertia2 );
-		bool SolveAndApply( Body &body1, Body &body2, const Vector< 6 > &correction,
+			Mat44Arg inverseInertia1, Mat44Arg inverseInertia2, bool forcePrecision = false );
+		bool SolveAndApply( Body &body1, Body &body2, const Vector< N > &correction,
 			float biasFactor, float dampingFactor, const BodySolverData &bodies ) const;
 	};
 
@@ -175,7 +191,7 @@ private:
 	{
 		FixedSolverStorage() { mCorrection.SetZero(); }
 		BodySolverData mBodies;
-		FixedJacobianSystem mJacobian;
+		PreciseJacobianSystem< 6 > mJacobian;
 		Vector< 6 > mCorrection;
 		bool mPrepared = false;
 	};
@@ -204,6 +220,16 @@ private:
 		Vector< 3 > mLinearCorrection;
 	};
 
+	struct HingeSolverStorage
+	{
+		HingeSolverStorage() { mCorrection.SetZero(); }
+		BodySolverData mBodies;
+		PreciseJacobianSystem< 5 > mJacobian;
+		Vector< 5 > mCorrection;
+		Vec3 mHingeAxis { Vec3::sAxisX() };
+		float mAngle = 0.0f;
+	};
+
 	struct RagdollLimit
 	{
 		bool mLimitEnabled = true;
@@ -217,6 +243,11 @@ private:
 	};
 
 	void BuildRagdollRuntime();
+	bool SetupHinge( float deltaTime, HingeSolverStorage &storage );
+	bool SolveHinge( float deltaTime, HingeSolverStorage &storage,
+		float tauFactor, float dampingFactor, bool firstSolve );
+	bool SolveHingeAngularLimit( float deltaTime, const HingeSolverStorage &storage,
+		float tauFactor, float dampingFactor );
 	void PrepareBodySolverData( BodySolverData &storage ) const;
 	bool SetupFixed( float deltaTime, FixedSolverStorage &storage );
 	bool SolveFixed( FixedSolverStorage &storage, float tauFactor, float dampingFactor,
@@ -245,6 +276,7 @@ private:
 	Mat44 mRagdollFrame1 { Mat44::sIdentity() };
 	Mat44 mRagdollFrame2 { Mat44::sIdentity() };
 	std::array< RagdollLimit, 3 > mRagdollLimits;
+	RagdollLimit mHingeLimit;
 	std::array< uint8, 3 > mRagdollAxisMap { 0, 1, 2 };
 	float mRagdollConeCenter = 0.0f;
 	uint64 mBodyPropertiesRevision = 0;

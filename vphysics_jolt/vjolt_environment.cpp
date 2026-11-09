@@ -62,7 +62,11 @@ static constexpr uint kMaxBodyPairs = kMaxBodies;
 // number then these contacts will be ignored and bodies will start interpenetrating / fall through the world.
 static constexpr uint kMaxContactConstraints = kMaxBodies;
 
-static ConVar vjolt_linearcast( "vjolt_linearcast", "0", FCVAR_NONE, "Enable native Jolt LinearCast CCD for newly created environments, including native NPC bodies. Disabled by default; restart the map after changing." );
+static ConVar vjolt_linearcast( "vjolt_linearcast", "0", FCVAR_NONE,
+	"Enable native Jolt LinearCast CCD. Applies to existing and new rigid bodies on the next simulation step." );
+static ConVar vjolt_ccd_substeps( "vjolt_ccd_substeps", "1", FCVAR_NONE,
+	"Collision steps within each VPhysics PSI while CCD is enabled. Subdivides elapsed time; does not advance the simulation faster.",
+	true, 1.0f, true, 8.0f );
 static ConVar vjolt_enhanced_inactive_edge_detection( "vjolt_enhanced_inactive_edge_detection", "1", FCVAR_NONE, "Whether bodies will be created with enhanced inactive edge detection (only takes effect after map restart)." );
 static ConVar vjolt_initial_simulation( "vjolt_initial_simulation", "0", FCVAR_NONE, "Whether to pre-settle physics objects on map load." );
 static ConVar vjolt_friction_scale( "vjolt_friction_scale", "1", FCVAR_NONE,
@@ -1279,7 +1283,8 @@ void JoltPhysicsEnvironment::Simulate( float deltaTime )
 		// broad range use the inner collision target and do not apply an early support impulse.
 		settings.mSpeculativeContactDistance =
 			SourceToJolt::Distance( 4.5f * flIVPCollisionTolerance );
-		settings.mPenetrationSlop = 0.0f;
+		// Keep Jolt's default penetration allowance so LinearCast can advance past
+		// touching contacts instead of repeatedly stopping a body at TOI = 0.
 		// Match Jolt's intended motion-quality policy: only bodies that move at least 75% of their
 		// inner radius in one step need a linear cast. Forcing this to zero cast every moving body,
 		// which dominated dense vehicle scenes without improving their trajectories.
@@ -1302,6 +1307,22 @@ void JoltPhysicsEnvironment::Simulate( float deltaTime )
 
 	// Clear any dead objects before running the simulation.
 	DeleteDeadObjects();
+	const bool useLinearCast = vjolt_linearcast.GetBool();
+	if ( useLinearCast != m_bUseLinearCast )
+	{
+		// Apply on the simulation owner thread before any physics jobs run. Include
+		// native rigid bodies that do not have a JoltPhysicsObject wrapper.
+		m_bUseLinearCast = useLinearCast;
+		JPH::BodyIDVector bodies;
+		m_PhysicsSystem.GetBodies( bodies );
+		JPH::BodyInterface &bodyInterface = m_PhysicsSystem.GetBodyInterfaceNoLock();
+		const JPH::EMotionQuality quality = useLinearCast
+			? JPH::EMotionQuality::LinearCast : JPH::EMotionQuality::Discrete;
+		for ( const JPH::BodyID &bodyID : bodies )
+			if ( bodyInterface.GetBodyType( bodyID ) == JPH::EBodyType::RigidBody
+				&& bodyInterface.GetMotionType( bodyID ) != JPH::EMotionType::Static )
+				bodyInterface.SetMotionQuality( bodyID, quality );
+	}
 
 	const float requestedFrictionScale = vjolt_friction_scale.GetFloat();
 	const float frictionScale = std::isfinite( requestedFrictionScale )
@@ -1481,7 +1502,7 @@ void JoltPhysicsEnvironment::Simulate( float deltaTime )
 		for ( int nPSI = 0; nPSI < nPhysicsPSISteps; ++nPSI )
 		{
 			preparePhysicsPSI( flPhysicsPSITime );
-			updatePhysics( flPhysicsPSITime, 1 );
+			updatePhysics( flPhysicsPSITime, m_bUseLinearCast ? vjolt_ccd_substeps.GetInt() : 1 );
 		}
 	}
 

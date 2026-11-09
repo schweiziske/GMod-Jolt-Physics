@@ -3,9 +3,11 @@
 # Keep the SDK unchanged: generate an overlay header and compile convar.cpp
 # against it in each DLL, preventing extraction of the incompatible tier1 OBJ.
 function(volt_fix_gmod_convar target)
-  if(EXISTS "${VOLT_GMOD_SDK}/public/gmod_sdk_branch.h")
-    # gmod-project-sdk selects the public or x86-64 beta ConVar ABI from its
-    # profile and builds a matching tier1. This overlay does not apply.
+  if(EXISTS "${VOLT_GMOD_SDK}/public/gmod_sdk_branch.h"
+      AND NOT SOURCE_SDK_PROFILE STREQUAL "gmod-beta")
+    # Public/SDK2013 profiles retain their own ConVar ABI. The beta SDK still
+    # declares two extra virtuals: GMod Lua dispatches GetFloat/GetInt at 12/13,
+    # so beta DLLs also need the overlay and their own matching convar.cpp.
     return()
   endif()
   set(header "${VOLT_GMOD_SDK}/public/tier1/convar.h")

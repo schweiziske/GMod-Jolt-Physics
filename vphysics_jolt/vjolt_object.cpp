@@ -2170,6 +2170,10 @@ void JoltPhysicsObject::RecomputeDrag()
 
 float JoltPhysicsObject::GetDragInDirection( JPH::Vec3Arg vWorldVelocity ) const
 {
+	// Addons use +infinity to stop a removed limb before pinning it. Handle
+	// rest explicitly: infinity * zero is invalid with Jolt's FP traps enabled.
+	if ( std::isinf( m_flLinearDragCoefficient ) && m_flLinearDragCoefficient > 0.0f )
+		return vWorldVelocity == JPH::Vec3::sZero() ? 0.0f : m_flLinearDragCoefficient;
 	// Transform the world-space velocity into the body's local frame, then dot with
 	// the local-space drag basis. Mirrors IVP's m_world_f_core->vimult3.
 	const JPH::Vec3 vLocal = m_pBody->GetRotation().Conjugated() * vWorldVelocity;
@@ -2183,6 +2187,8 @@ float JoltPhysicsObject::GetDragInDirection( JPH::Vec3Arg vWorldVelocity ) const
 
 float JoltPhysicsObject::GetAngularDragInDirection( JPH::Vec3Arg vLocalAngularVelocity ) const
 {
+	if ( std::isinf( m_flAngularDragCoefficient ) && m_flAngularDragCoefficient > 0.0f )
+		return vLocalAngularVelocity == JPH::Vec3::sZero() ? 0.0f : m_flAngularDragCoefficient;
 	return m_flAngularDragCoefficient * fabsf( vLocalAngularVelocity.GetX() * m_vAngDragBasis.GetX() )
 		+ fabsf( vLocalAngularVelocity.GetY() * m_vAngDragBasis.GetY() )
 		+ fabsf( vLocalAngularVelocity.GetZ() * m_vAngDragBasis.GetZ() );

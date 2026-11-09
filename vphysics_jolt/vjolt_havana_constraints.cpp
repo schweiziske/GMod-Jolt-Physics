@@ -107,6 +107,14 @@ void HavanaConstraintSettings::SaveBinaryState( StreamOut &stream ) const
 	stream.Write( mRagdollMotorForce );
 	stream.Write( mRagdollUseClockwiseRotations );
 	stream.Write( mRagdollConstrainTranslation );
+	if ( mKind == EHavanaConstraintKind::Hinge )
+	{
+		stream.Write( mHingeLimitEnabled );
+		stream.Write( mHingeLimitMin );
+		stream.Write( mHingeLimitMax );
+		stream.Write( mHingeMotorVelocity );
+		stream.Write( mHingeMotorForce );
+	}
 }
 
 void HavanaConstraintSettings::RestoreBinaryState( StreamIn &stream )
@@ -125,6 +133,14 @@ void HavanaConstraintSettings::RestoreBinaryState( StreamIn &stream )
 	stream.Read( mRagdollMotorForce );
 	stream.Read( mRagdollUseClockwiseRotations );
 	stream.Read( mRagdollConstrainTranslation );
+	if ( mKind == EHavanaConstraintKind::Hinge )
+	{
+		stream.Read( mHingeLimitEnabled );
+		stream.Read( mHingeLimitMin );
+		stream.Read( mHingeLimitMax );
+		stream.Read( mHingeMotorVelocity );
+		stream.Read( mHingeMotorForce );
+	}
 }
 
 static Mat44 BodyInverseInertiaSource( const Body &body )
@@ -170,9 +186,10 @@ static void BuildPreciseInverseInertiaHavana( const Body &body, double (&outIner
 		}
 }
 
-bool HavanaConstraint::FixedJacobianSystem::Setup( const Body &body1, const Body &body2,
+template <uint N>
+bool HavanaConstraint::PreciseJacobianSystem< N >::Setup( const Body &body1, const Body &body2,
 	float inverseMass1, float inverseMass2,
-	Mat44Arg inverseInertia1, Mat44Arg inverseInertia2 )
+	Mat44Arg inverseInertia1, Mat44Arg inverseInertia2, bool forcePrecision )
 {
 	const Vec3 diagonal1 = body1.IsDynamic() ? body1.GetMotionProperties()->GetInverseInertiaDiagonal() : Vec3::sZero();
 	const Vec3 diagonal2 = body2.IsDynamic() ? body2.GetMotionProperties()->GetInverseInertiaDiagonal() : Vec3::sZero();
@@ -186,19 +203,19 @@ bool HavanaConstraint::FixedJacobianSystem::Setup( const Body &body1, const Body
 	// extra precision before rotational terms can bury translational mass in float.
 	// This changes arithmetic precision, never mass, damping, iteration count or limits.
 	constexpr double cMaximumFloatCondition = 4096.0;
-	mPrecise = !( leverage < 2.0 * cMaximumFloatCondition * ( double( inverseMass1 ) + inverseMass2 )
+	mPrecise = forcePrecision || !( leverage < 2.0 * cMaximumFloatCondition * ( double( inverseMass1 ) + inverseMass2 )
 		&& maximum1 + maximum2 < cMaximumFloatCondition * minimum );
 	if ( !mPrecise )
 	{
-		if ( JacobianSystem< 6 >::Setup( body1, body2, inverseMass1, inverseMass2, inverseInertia1, inverseInertia2 ) )
+		if ( JacobianSystem< N >::Setup( body1, body2, inverseMass1, inverseMass2, inverseInertia1, inverseInertia2 ) )
 			return true;
 		mPrecise = true;
 	}
 	mValid = false;
 	BuildPreciseInverseInertiaHavana( body1, mInverseInertia1 );
 	BuildPreciseInverseInertiaHavana( body2, mInverseInertia2 );
-	double angular1[6][3], angular2[6][3];
-	for ( uint column = 0; column < 6; ++column )
+	double angular1[N][3], angular2[N][3];
+	for ( uint column = 0; column < N; ++column )
 		for ( uint axis = 0; axis < 3; ++axis )
 		{
 			angular1[column][axis] = angular2[column][axis] = 0.0;
@@ -216,7 +233,7 @@ bool HavanaConstraint::FixedJacobianSystem::Setup( const Body &body1, const Body
 	// changes the equations; a captured distant weld amplified error 5.44x per step.
 	// Double starts BEFORE the Gram sum: promoting an already rounded float matrix
 	// cannot recover a small translational term lost beside a long lever arm.
-	for ( uint row = 0; row < 6; ++row )
+	for ( uint row = 0; row < N; ++row )
 		for ( uint column = 0; column <= row; ++column )
 		{
 			const JacobianRow &r = mRows[row], &c = mRows[column];
@@ -241,15 +258,16 @@ bool HavanaConstraint::FixedJacobianSystem::Setup( const Body &body1, const Body
 	return true;
 }
 
-bool HavanaConstraint::FixedJacobianSystem::SolveAndApply( Body &body1, Body &body2,
-	const Vector< 6 > &correction, float biasFactor, float dampingFactor,
+template <uint N>
+bool HavanaConstraint::PreciseJacobianSystem< N >::SolveAndApply( Body &body1, Body &body2,
+	const Vector< N > &correction, float biasFactor, float dampingFactor,
 	const BodySolverData &bodies ) const
 {
 	if ( !mValid )
 		return false;
 	if ( !mPrecise )
 	{
-		const Vector< 6 > lambda = mEffectiveMass
+		const Vector< N > lambda = mEffectiveMass
 			* ( biasFactor * correction - dampingFactor * GetVelocity( body1, body2 ) );
 		return ApplyImpulse( body1, body2, lambda, bodies.mInverseMass1, bodies.mInverseMass2,
 			bodies.mInverseInertiaSource1, bodies.mInverseInertiaSource2 );
@@ -258,8 +276,8 @@ bool HavanaConstraint::FixedJacobianSystem::SolveAndApply( Body &body1, Body &bo
 	const Vec3 angular1 = HavanaFromSourceVector( body1.GetAngularVelocity() );
 	const Vec3 linear2 = HavanaFromSourceVector( body2.GetLinearVelocity() );
 	const Vec3 angular2 = HavanaFromSourceVector( body2.GetAngularVelocity() );
-	double lambda[6];
-	for ( uint row = 0; row < 6; ++row )
+	double lambda[N];
+	for ( uint row = 0; row < N; ++row )
 	{
 		const JacobianRow &j = mRows[row];
 		const double velocity = PreciseDot( j.mLinear1, linear1 ) + PreciseDot( j.mAngular1, angular1 )
@@ -268,12 +286,12 @@ bool HavanaConstraint::FixedJacobianSystem::SolveAndApply( Body &body1, Body &bo
 		for ( uint column = 0; column < row; ++column )
 			lambda[row] -= mLDLT[row][column] * lambda[column];
 	}
-	for ( uint row = 0; row < 6; ++row )
+	for ( uint row = 0; row < N; ++row )
 		lambda[row] *= mInverseDiagonal[row];
 	bool nonzero = false;
-	for ( int row = 5; row >= 0; --row )
+	for ( int row = int( N ) - 1; row >= 0; --row )
 	{
-		for ( uint column = uint( row ) + 1; column < 6; ++column )
+		for ( uint column = uint( row ) + 1; column < N; ++column )
 			lambda[row] -= mLDLT[column][row] * lambda[column];
 		nonzero |= lambda[row] != 0.0;
 	}
@@ -283,7 +301,7 @@ bool HavanaConstraint::FixedJacobianSystem::SolveAndApply( Body &body1, Body &bo
 	// Translation and rotation rows may carry large, opposing torques. Do not
 	// round each lambda/torque to float before cancelling them at the body.
 	double impulses[4][3] = {};
-	for ( uint row = 0; row < 6; ++row )
+	for ( uint row = 0; row < N; ++row )
 		for ( uint axis = 0; axis < 3; ++axis )
 		{
 			impulses[0][axis] += lambda[row] * mRows[row].mLinear1[axis];
@@ -427,6 +445,15 @@ HavanaConstraint::HavanaConstraint( Body &body1, Body &body2, const HavanaConstr
 {
 	if ( mSettings.mKind == EHavanaConstraintKind::Ragdoll )
 		BuildRagdollRuntime();
+	else if ( mSettings.mKind == EHavanaConstraintKind::Hinge )
+	{
+		mHingeLimit.mLimitEnabled = settings.mHingeLimitEnabled;
+		mHingeLimit.mLimitMin = settings.mHingeLimitMin;
+		mHingeLimit.mLimitMax = settings.mHingeLimitMax;
+		SetHingeMotor( settings.mHingeMotorVelocity, settings.mHingeMotorForce );
+		// Havana initializes the motor reference at zero. init_angular_limit only
+		// unwraps a nonzero reference against the creation angle; it does not reset it.
+	}
 }
 
 void HavanaConstraint::NotifyShapeChanged( const BodyID &bodyID, Vec3Arg deltaCOM )
@@ -478,6 +505,7 @@ size_t HavanaConstraint::GetLegacySolverStorageSize() const
 		case EHavanaConstraintKind::Fixed: return sizeof( FixedSolverStorage );
 		case EHavanaConstraintKind::Length: return sizeof( LengthSolverStorage );
 		case EHavanaConstraintKind::Ragdoll: return sizeof( RagdollSolverStorage );
+		case EHavanaConstraintKind::Hinge: return sizeof( HingeSolverStorage );
 	}
 	return 0;
 }
@@ -489,6 +517,7 @@ size_t HavanaConstraint::GetLegacySolverStorageAlignment() const
 		case EHavanaConstraintKind::Fixed: return alignof( FixedSolverStorage );
 		case EHavanaConstraintKind::Length: return alignof( LengthSolverStorage );
 		case EHavanaConstraintKind::Ragdoll: return alignof( RagdollSolverStorage );
+		case EHavanaConstraintKind::Hinge: return alignof( HingeSolverStorage );
 	}
 	return 1;
 }
@@ -500,6 +529,7 @@ void HavanaConstraint::InitializeLegacySolverStorage( void *storage ) const
 		case EHavanaConstraintKind::Fixed: new ( storage ) FixedSolverStorage(); break;
 		case EHavanaConstraintKind::Length: new ( storage ) LengthSolverStorage(); break;
 		case EHavanaConstraintKind::Ragdoll: new ( storage ) RagdollSolverStorage(); break;
+		case EHavanaConstraintKind::Hinge: new ( storage ) HingeSolverStorage(); break;
 	}
 }
 
@@ -510,6 +540,7 @@ void HavanaConstraint::DestroyLegacySolverStorage( void *storage ) const
 		case EHavanaConstraintKind::Fixed: static_cast< FixedSolverStorage * >( storage )->~FixedSolverStorage(); break;
 		case EHavanaConstraintKind::Length: static_cast< LengthSolverStorage * >( storage )->~LengthSolverStorage(); break;
 		case EHavanaConstraintKind::Ragdoll: static_cast< RagdollSolverStorage * >( storage )->~RagdollSolverStorage(); break;
+		case EHavanaConstraintKind::Hinge: static_cast< HingeSolverStorage * >( storage )->~HingeSolverStorage(); break;
 	}
 }
 
@@ -568,6 +599,14 @@ bool HavanaConstraint::SetupAndSolveLegacyVelocityConstraint( void *storage, flo
 				tauFactor, dampingFactor, true );
 			break;
 		}
+		case EHavanaConstraintKind::Hinge:
+		{
+			auto &work = *static_cast< HingeSolverStorage * >( storage );
+			PrepareBodySolverData( work.mBodies );
+			setup = SetupHinge( deltaTime, work );
+			if ( setup ) applied = SolveHinge( deltaTime, work, tauFactor, dampingFactor, true );
+			break;
+		}
 	}
 	return applied;
 }
@@ -579,7 +618,9 @@ bool HavanaConstraint::StepLegacyVelocityConstraint( void *storage, float deltaT
 		? &static_cast<FixedSolverStorage *>( storage )->mBodies
 		: mSettings.mKind == EHavanaConstraintKind::Length
 			? &static_cast<LengthSolverStorage *>( storage )->mBodies
-			: &static_cast<RagdollSolverStorage *>( storage )->mBodies;
+			: mSettings.mKind == EHavanaConstraintKind::Hinge
+				? &static_cast<HingeSolverStorage *>( storage )->mBodies
+				: &static_cast<RagdollSolverStorage *>( storage )->mBodies;
 	if ( bodies->mRevision != mBodyPropertiesRevision )
 		return SetupAndSolveLegacyVelocityConstraint( storage, deltaTime, tauFactor, dampingFactor );
 	bool applied = false;
@@ -595,6 +636,10 @@ bool HavanaConstraint::StepLegacyVelocityConstraint( void *storage, float deltaT
 			break;
 		case EHavanaConstraintKind::Ragdoll:
 			applied = SolveRagdoll( deltaTime, *static_cast< RagdollSolverStorage * >( storage ),
+				tauFactor, dampingFactor, false );
+			break;
+		case EHavanaConstraintKind::Hinge:
+			applied = SolveHinge( deltaTime, *static_cast< HingeSolverStorage * >( storage ),
 				tauFactor, dampingFactor, false );
 			break;
 	}
@@ -653,11 +698,21 @@ bool HavanaConstraint::RequiresPostContactLegacySolve() const
 
 Mat44 HavanaConstraint::GetConstraintToBody1Matrix() const
 {
+	if ( mSettings.mKind == EHavanaConstraintKind::Hinge )
+		return Mat44( Vec4( SourceFromHavanaVector( mSettings.mFrame1.GetAxisX() ), 0 ),
+			Vec4( SourceFromHavanaVector( mSettings.mFrame1.GetAxisY() ), 0 ),
+			Vec4( SourceFromHavanaVector( mSettings.mFrame1.GetAxisZ() ), 0 ),
+			Vec4( SourceFromHavanaVector( mSettings.mFrame1.GetTranslation() ), 1 ) );
 	return SourceFromHavanaTransform( mSettings.mKind == EHavanaConstraintKind::Ragdoll ? mRagdollFrame1 : mSettings.mFrame1 );
 }
 
 Mat44 HavanaConstraint::GetConstraintToBody2Matrix() const
 {
+	if ( mSettings.mKind == EHavanaConstraintKind::Hinge )
+		return Mat44( Vec4( SourceFromHavanaVector( mSettings.mFrame2.GetAxisX() ), 0 ),
+			Vec4( SourceFromHavanaVector( mSettings.mFrame2.GetAxisY() ), 0 ),
+			Vec4( SourceFromHavanaVector( mSettings.mFrame2.GetAxisZ() ), 0 ),
+			Vec4( SourceFromHavanaVector( mSettings.mFrame2.GetTranslation() ), 1 ) );
 	return SourceFromHavanaTransform( mSettings.mKind == EHavanaConstraintKind::Ragdoll ? mRagdollFrame2 : mSettings.mFrame2 );
 }
 
@@ -673,6 +728,8 @@ void HavanaConstraint::SaveState( StateRecorder &stream ) const
 	TwoBodyConstraint::SaveState( stream );
 	for ( const RagdollLimit &limit : mRagdollLimits )
 		stream.Write( limit.mReferencePosition );
+	if ( mSettings.mKind == EHavanaConstraintKind::Hinge )
+		stream.Write( mHingeLimit.mReferencePosition );
 }
 
 void HavanaConstraint::RestoreState( StateRecorder &stream )
@@ -680,6 +737,8 @@ void HavanaConstraint::RestoreState( StateRecorder &stream )
 	TwoBodyConstraint::RestoreState( stream );
 	for ( RagdollLimit &limit : mRagdollLimits )
 		stream.Read( limit.mReferencePosition );
+	if ( mSettings.mKind == EHavanaConstraintKind::Hinge )
+		stream.Read( mHingeLimit.mReferencePosition );
 }
 
 #ifdef JPH_DEBUG_RENDERER
@@ -1020,8 +1079,11 @@ bool HavanaConstraint::SetupRagdoll( float deltaTime, RagdollSolverStorage &stor
 	if ( deltaTime <= 0.0f )
 		return false;
 
-	const Mat44 bodyTransform1 = GetBodyTransformHavana( *mBody1 );
-	const Mat44 bodyTransform2 = GetBodyTransformHavana( *mBody2 );
+	// Keep the pair relative before converting to float, so distant map origins
+	// do not round away the small error between the two local joint frames.
+	const Mat44 bodyTransform1 = HavanaFromSourceTransform( Mat44::sRotation( mBody1->GetRotation() ) );
+	const Mat44 bodyTransform2 = HavanaFromSourceTransform( Mat44::sRotationTranslation(
+		mBody2->GetRotation(), Vec3( mBody2->GetCenterOfMassPosition() - mBody1->GetCenterOfMassPosition() ) ) );
 	const Mat44 frame1World = bodyTransform1 * mRagdollFrame1;
 	const Mat44 frame2World = bodyTransform2 * mRagdollFrame2;
 	storage.mTwistAxisReference = frame1World.GetAxisX();
@@ -1339,7 +1401,125 @@ void HavanaConstraint::UpdateRagdollTransforms( Mat44Arg frame1Havana, Mat44Arg 
 		RotateFrameLocally( mRagdollFrame1, 2, mRagdollConeCenter );
 }
 
+bool HavanaConstraint::SetupHinge( float deltaTime, HingeSolverStorage &storage )
+{
+	storage.mJacobian.mValid = false;
+	if ( deltaTime <= 0.0f )
+		return false;
+
+	const Mat44 transform1 = GetBodyTransformHavana( *mBody1 );
+	const Mat44 transform2 = GetBodyTransformHavana( *mBody2 );
+	const Mat44 frame1 = transform1 * mSettings.mFrame1;
+	const Mat44 frame2 = transform2 * mSettings.mFrame2;
+	const Vec3 relative1 = transform1.Multiply3x3( mSettings.mFrame1.GetTranslation() );
+	const Vec3 relative2 = transform2.Multiply3x3( mSettings.mFrame2.GetTranslation() );
+	const Vec3 perpendicularX = frame1.GetAxisY();
+	const Vec3 perpendicularY = perpendicularX.Cross( frame1.GetAxisX() );
+	storage.mHingeAxis = frame1.GetAxisX();
+	storage.mAngle = std::atan2( frame2.GetAxisY().Dot( perpendicularY ),
+		frame2.GetAxisY().Dot( perpendicularX ) );
+
+	const Vec3 axes[3] = { Vec3::sAxisX(), Vec3::sAxisY(), Vec3::sAxisZ() };
+	for ( uint axis = 0; axis < 3; ++axis )
+	{
+		JacobianRow &row = storage.mJacobian.mRows[axis];
+		row.mLinear1 = axes[axis];
+		row.mLinear2 = -axes[axis];
+		row.mAngular1 = relative1.Cross( row.mLinear1 );
+		row.mAngular2 = relative2.Cross( row.mLinear2 );
+	}
+	for ( uint axis = 0; axis < 2; ++axis )
+	{
+		JacobianRow &row = storage.mJacobian.mRows[3 + axis];
+		row.mAngular1 = axis == 0 ? perpendicularX : perpendicularY;
+		row.mAngular2 = -row.mAngular1;
+	}
+
+	const Vec3 separation = HavanaFromSourceVector( Vec3(
+		mBody2->GetCenterOfMassPosition() - mBody1->GetCenterOfMassPosition() ) ) + relative2 - relative1;
+	storage.mCorrection[0] = separation.GetX() / deltaTime;
+	storage.mCorrection[1] = separation.GetY() / deltaTime;
+	storage.mCorrection[2] = separation.GetZ() / deltaTime;
+	storage.mCorrection[3] = perpendicularY.Dot( frame2.GetAxisX() ) / deltaTime;
+	storage.mCorrection[4] = -perpendicularX.Dot( frame2.GetAxisX() ) / deltaTime;
+	return storage.mJacobian.Setup( *mBody1, *mBody2,
+		storage.mBodies.mInverseMass1, storage.mBodies.mInverseMass2,
+		storage.mBodies.mInverseInertiaHavana1, storage.mBodies.mInverseInertiaHavana2, true );
+}
+
+bool HavanaConstraint::SolveHingeAngularLimit( float deltaTime, const HingeSolverStorage &storage,
+	float tauFactor, float dampingFactor )
+{
+	if ( !mHingeLimit.mFrictionEnabled && !mHingeLimit.mLimitEnabled )
+		return false;
+	const float inverseMass = GetAngularInverseMassHavana( storage.mHingeAxis, storage.mBodies );
+	if ( inverseMass <= FLT_EPSILON )
+		return false;
+	const float virtualMass = 1.0f / inverseMass;
+	const float velocity = storage.mHingeAxis.Dot( HavanaFromSourceVector(
+		mBody1->GetAngularVelocity() - mBody2->GetAngularVelocity() ) );
+	float angle = storage.mAngle;
+	float impulse = 0.0f;
+	if ( mHingeLimit.mFrictionEnabled )
+	{
+		float error = mHingeLimit.mReferencePosition - angle;
+		mHingeLimit.mReferencePosition += mHingeLimit.mDesiredVelocity * deltaTime;
+		if ( error > JPH_PI )
+		{
+			error -= 2.0f * JPH_PI;
+			angle += 2.0f * JPH_PI;
+		}
+		if ( error < -JPH_PI )
+		{
+			error += 2.0f * JPH_PI;
+			angle -= 2.0f * JPH_PI;
+		}
+		impulse = virtualMass * ( error * 0.8f * tauFactor / deltaTime - dampingFactor * velocity );
+		if ( std::fabs( impulse ) / deltaTime > mHingeLimit.mJointFriction )
+		{
+			const float factor = mHingeLimit.mJointFriction * deltaTime / std::fabs( impulse );
+			impulse *= factor;
+			mHingeLimit.mReferencePosition -= ( 1.0f - factor ) * error;
+		}
+	}
+	if ( mHingeLimit.mLimitEnabled )
+	{
+		const float nextAngle = angle + ( velocity + impulse * inverseMass ) * deltaTime;
+		if ( nextAngle > mHingeLimit.mLimitMax )
+			impulse -= virtualMass * ( nextAngle - mHingeLimit.mLimitMax ) * tauFactor / deltaTime;
+		else if ( nextAngle < mHingeLimit.mLimitMin )
+			impulse -= virtualMass * ( nextAngle - mHingeLimit.mLimitMin ) * tauFactor / deltaTime;
+	}
+	return ApplyAngularImpulseHavana( storage.mHingeAxis, impulse, storage.mBodies );
+}
+
+bool HavanaConstraint::SolveHinge( float deltaTime, HingeSolverStorage &storage,
+	float tauFactor, float dampingFactor, bool firstSolve )
+{
+	if ( !storage.mJacobian.mValid )
+		return false;
+	// Havana invokes its one-axis limit/motor utility only in setup_and_step.
+	// The five coupled rows then observe the velocity after that impulse. Later
+	// step_constraint calls reuse the geometry and update only J*v.
+	bool applied = firstSolve && SolveHingeAngularLimit( deltaTime, storage, tauFactor, dampingFactor );
+	applied |= storage.mJacobian.SolveAndApply( *mBody1, *mBody2, storage.mCorrection,
+		mSettings.mTau * tauFactor, mSettings.mStrength * dampingFactor, storage.mBodies );
+	return applied;
+}
+
+void HavanaConstraint::SetHingeMotor( float angularVelocity, float maxAngularForce )
+{
+	if ( mSettings.mKind != EHavanaConstraintKind::Hinge )
+		return;
+	mSettings.mHingeMotorVelocity = angularVelocity;
+	mSettings.mHingeMotorForce = std::fabs( maxAngularForce );
+	mHingeLimit.mFrictionEnabled = maxAngularForce != 0.0f;
+	mHingeLimit.mDesiredVelocity = angularVelocity;
+	mHingeLimit.mJointFriction = mSettings.mHingeMotorForce;
+}
+
 template struct HavanaConstraint::JacobianSystem< 1 >;
+template struct HavanaConstraint::JacobianSystem< 5 >;
 template struct HavanaConstraint::JacobianSystem< 3 >;
 template struct HavanaConstraint::JacobianSystem< 6 >;
 
