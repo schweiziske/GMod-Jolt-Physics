@@ -248,6 +248,11 @@ void JoltPhysicsConstraint::SetLinearMotor( float speed, float maxLinearImpulse 
 	{
 		case CONSTRAINT_SLIDING:
 		{
+			if ( m_pConstraint->GetSubType() == JPH::EConstraintSubType::User1 )
+			{
+				static_cast<JPH::HavanaConstraint *>( m_pConstraint.GetPtr() )->SetSlidingMotor( speed, maxLinearImpulse );
+				break;
+			}
 			JPH::SliderConstraint *pConstraint = static_cast<JPH::SliderConstraint *>( m_pConstraint.GetPtr() );
 			pConstraint->SetLegacyMotor( speed, maxLinearImpulse );
 
@@ -360,7 +365,9 @@ bool JoltPhysicsConstraint::GetConstraintTransform( matrix3x4_t *pConstraintToRe
 		// Ragdolls report their runtime frames. A weld's frames are the attached object's origin
 		// in reference space and in its own space. Length constraints keep no frame.
 		const auto *pHavana = static_cast< const JPH::HavanaConstraint * >( m_pConstraint.GetPtr() );
-		if ( pHavana->GetHavanaKind() == JPH::EHavanaConstraintKind::Length )
+		if ( pHavana->GetHavanaKind() == JPH::EHavanaConstraintKind::Length
+			|| pHavana->GetHavanaKind() == JPH::EHavanaConstraintKind::Sliding
+			|| pHavana->GetHavanaKind() == JPH::EHavanaConstraintKind::Pulley )
 			return false;
 		if ( pConstraintToReference )
 			*pConstraintToReference = JoltConstraintFrameToSourceObjectLocal(
@@ -522,9 +529,8 @@ void JoltPhysicsConstraint::InitialiseRagdoll( IPhysicsConstraintGroup *pGroup, 
 		ragdoll.constraintToReference, pRefBody->GetShape()->GetCenterOfMass() );
 	settings.mFrame2 = BuildHavanaRagdollFrame(
 		ragdoll.constraintToAttached, pAttBody->GetShape()->GetCenterOfMass() );
-	// A full-frame Havana correction fights native floor contacts in grouped
-	// ragdolls. Use Jolt's usual 0.2 correction fraction for their positional
-	// rows, retaining angular limits and standalone constraint behavior.
+	// Explicit ragdoll groups share native floor contacts. Keep their verified translation
+	// relaxation; full Source correction still applies to standalone joints and converted hinges.
 	settings.mTau = pGroup && !ragdoll.onlyAngularLimits ? 0.2f : 1.0f;
 	settings.mStrength = 1.0f;
 	settings.mRagdollUseClockwiseRotations = ragdoll.useClockwiseRotations;
@@ -592,7 +598,7 @@ bool JoltPhysicsConstraint::InitialiseHingeFromRagdoll( IPhysicsConstraintGroup 
 	hinge.hingeAxis.torque = RAD2DEG( hinge.hingeAxis.torque * m_pObjReference->GetMass() );
 
 	// Ragdoll's historical clockwise flag changes its public limit convention. Source flips the
-	// axis limits here; InitialiseHingeInternal performs the separate Havana -> Jolt sign flip.
+	// axis limits here before entering the Havana hinge adapter.
 	if ( !ragdoll.useClockwiseRotations )
 	{
 		const float minRotation = hinge.hingeAxis.minRotation;
@@ -694,48 +700,37 @@ void JoltPhysicsConstraint::InitialiseSliding( IPhysicsConstraintGroup *pGroup, 
 	JPH::Body *refBody = m_pObjReference->GetBody();
 	JPH::Body *attBody = m_pObjAttached->GetBody();
 
-	JPH::SliderConstraintSettings settings;
-	settings.mNumVelocityStepsOverride = vjolt_constraint_velocity_substeps.GetInt();
-	settings.mNumPositionStepsOverride = vjolt_constraint_position_substeps.GetInt();
-	settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
-	settings.mAutoDetectPoint = false;
+	JPH::HavanaConstraintSettings settings;
+	settings.mKind = JPH::EHavanaConstraintKind::Sliding;
+	settings.mTau = sliding.constraint.strength;
 
 	const JPH::Vec3 sourceAxis = SourceToJolt::Unitless( sliding.slideAxisRef );
 	if ( sourceAxis.LengthSq() <= Square( FLT_EPSILON ) )
 		Log_Warning( LOG_VJolt, "Sliding constraint has a zero reference axis; using local X.\n" );
 
-	const JoltSliderConstraintFrames frames = BuildJoltSliderConstraintFrames(
-		SourceToJolt::Matrix( sliding.attachedRefXform ),
-		sourceAxis,
-		refBody->GetShape()->GetCenterOfMass(),
-		attBody->GetShape()->GetCenterOfMass() );
-	settings.mPoint1 = frames.m_PointReferenceCOM;
-	settings.mSliderAxis1 = frames.m_SliderAxisReferenceCOM;
-	settings.mNormalAxis1 = frames.m_NormalAxisReferenceCOM;
-	settings.mPoint2 = frames.m_PointAttachedCOM;
-	settings.mSliderAxis2 = frames.m_SliderAxisAttachedCOM;
-	settings.mNormalAxis2 = frames.m_NormalAxisAttachedCOM;
+	JPH::Mat44 targetFrame = SourceToJolt::Matrix( sliding.attachedRefXform );
+	targetFrame.SetTranslation( targetFrame.GetTranslation() - refBody->GetShape()->GetCenterOfMass() );
+	settings.mFrame1 = JPH::HavanaFromSourceTransform( targetFrame );
+	settings.mFrame2 = JPH::Mat44::sTranslation( JPH::HavanaFromSourceVector( -attBody->GetShape()->GetCenterOfMass() ) );
+	settings.mSlidingReferenceOrigin = JPH::HavanaFromSourceVector( -refBody->GetShape()->GetCenterOfMass() );
+	settings.mSlidingAxis = JPH::HavanaFromSourceVector( sourceAxis.NormalizedOr( JPH::Vec3::sAxisX() ) );
 
 	if ( sliding.limitMin != sliding.limitMax )
 	{
-		settings.mLimitsMin = SourceToJolt::Distance( sliding.limitMin );
-		settings.mLimitsMax = SourceToJolt::Distance( sliding.limitMax );
+		settings.mSlidingLimitEnabled = true;
+		settings.mSlidingLimitMin = SourceToJolt::Distance( sliding.limitMin );
+		settings.mSlidingLimitMax = SourceToJolt::Distance( sliding.limitMax );
 	}
 
 	const float maxForce = fabsf( SourceToJolt::Distance( sliding.friction ) );
+	settings.mSlidingMotorVelocity = SourceToJolt::Distance( sliding.velocity );
+	settings.mSlidingMotorForce = maxForce;
+	settings.mSlidingMotorEpsilon = UsesHavanaBreakableWrapper( sliding.constraint ) ? 1.0f : 0.2f;
 
 	m_pConstraint = settings.Create( *refBody, *attBody );
 	m_pConstraint->SetLegacyVelocitySolverSettings( sliding.constraint.strength, 1.0f );
 	m_pConstraint->SetLegacyBreakLimits( m_LinearBreakImpulse, m_AngularBreakImpulse );
 	m_pConstraint->SetEnabled( !pGroup && sliding.constraint.isActive );
-
-	// A normal prismatic is constructed directly in the local constraint system, which scales both
-	// desired velocity and max force by epsilon (0.2). Source's breakable path is a real exception:
-	// it constructs the underlying prismatic outside the system and wraps it afterwards, so the
-	// motor keeps epsilon 1. Runtime SetLinearMotor also keeps epsilon 1.
-	const float motorEpsilon = UsesHavanaBreakableWrapper( sliding.constraint ) ? 1.0f : 0.2f;
-	static_cast<JPH::SliderConstraint *>( m_pConstraint.GetPtr() )->SetLegacyMotor(
-		SourceToJolt::Distance( sliding.velocity ), maxForce, motorEpsilon );
 
 	RegisterWithPhysicsSystem();
 }
@@ -754,12 +749,13 @@ void JoltPhysicsConstraint::InitialiseBallsocket( IPhysicsConstraintGroup *pGrou
 	JPH::Body *refBody = m_pObjReference->GetBody();
 	JPH::Body *attBody = m_pObjAttached->GetBody();
 
-	JPH::PointConstraintSettings settings;
-	settings.mNumVelocityStepsOverride = vjolt_constraint_velocity_substeps.GetInt();
-	settings.mNumPositionStepsOverride = vjolt_constraint_position_substeps.GetInt();
-	settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
-	settings.mPoint1 = SourceToJolt::Distance( ballsocket.constraintPosition[0] ) - refBody->GetShape()->GetCenterOfMass();
-	settings.mPoint2 = SourceToJolt::Distance( ballsocket.constraintPosition[1] ) - attBody->GetShape()->GetCenterOfMass();
+	JPH::HavanaConstraintSettings settings;
+	settings.mKind = JPH::EHavanaConstraintKind::BallSocket;
+	settings.mFrame1 = JPH::Mat44::sTranslation( JPH::HavanaFromSourceVector(
+		SourceToJolt::Distance( ballsocket.constraintPosition[0] ) - refBody->GetShape()->GetCenterOfMass() ) );
+	settings.mFrame2 = JPH::Mat44::sTranslation( JPH::HavanaFromSourceVector(
+		SourceToJolt::Distance( ballsocket.constraintPosition[1] ) - attBody->GetShape()->GetCenterOfMass() ) );
+	settings.mStrength = ballsocket.constraint.strength;
 	// Havana ball-socket is the exception to the other basic constraints: Source writes
 	// constraint.strength to m_strength (the velocity term), while m_tau stays at 1.
 
@@ -851,19 +847,18 @@ void JoltPhysicsConstraint::InitialisePulley( IPhysicsConstraintGroup *pGroup, c
 	JPH::Body* refBody = m_pObjReference->GetBody();
 	JPH::Body* attBody = m_pObjAttached->GetBody();
 
-	JPH::PulleyConstraintSettings settings;
-	settings.mNumVelocityStepsOverride = vjolt_constraint_velocity_substeps.GetInt();
-	settings.mNumPositionStepsOverride = vjolt_constraint_position_substeps.GetInt();
-	settings.mSpace = JPH::EConstraintSpace::LocalToBodyCOM;
-	settings.mBodyPoint1 = SourceToJolt::Distance( pulley.objectPosition[0] ) - refBody->GetShape()->GetCenterOfMass();
-	settings.mBodyPoint2 = SourceToJolt::Distance( pulley.objectPosition[1] ) - attBody->GetShape()->GetCenterOfMass();
-
-	settings.mFixedPoint1 = SourceToJolt::Distance( pulley.pulleyPosition[0] );
-	settings.mFixedPoint2 = SourceToJolt::Distance( pulley.pulleyPosition[1] );
-
-	settings.mRatio = pulley.gearRatio;
-
-	settings.mMaxLength = SourceToJolt::Distance( pulley.totalLength ); // PiMoN: from my testing, it is the same value as Jolt would calculate automatically
+	JPH::HavanaConstraintSettings settings;
+	settings.mKind = JPH::EHavanaConstraintKind::Pulley;
+	settings.mTau = pulley.constraint.strength;
+	settings.mFrame1 = JPH::Mat44::sTranslation( JPH::HavanaFromSourceVector(
+		SourceToJolt::Distance( pulley.objectPosition[0] ) - refBody->GetShape()->GetCenterOfMass() ) );
+	settings.mFrame2 = JPH::Mat44::sTranslation( JPH::HavanaFromSourceVector(
+		SourceToJolt::Distance( pulley.objectPosition[1] ) - attBody->GetShape()->GetCenterOfMass() ) );
+	settings.mPulleyFixedPoint1 = JPH::HavanaFromSourceVector( SourceToJolt::Distance( pulley.pulleyPosition[0] ) );
+	settings.mPulleyFixedPoint2 = JPH::HavanaFromSourceVector( SourceToJolt::Distance( pulley.pulleyPosition[1] ) );
+	settings.mPulleyRatio = pulley.gearRatio;
+	settings.mPulleyIsRigid = pulley.isRigid;
+	settings.mMaxLength = SourceToJolt::Distance( pulley.totalLength );
 
 	m_pConstraint = settings.Create( *refBody, *attBody );
 	m_pConstraint->SetLegacyBreakLimits( m_LinearBreakImpulse, m_AngularBreakImpulse );

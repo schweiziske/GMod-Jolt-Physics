@@ -25,6 +25,9 @@ enum class EHavanaConstraintKind : uint8
 	Length,
 	Ragdoll,
 	Hinge,
+	BallSocket,
+	Sliding,
+	Pulley,
 };
 
 /// Source coordinates and Havana/IVP coordinates use different Y/Z conventions. Jolt is kept in
@@ -74,6 +77,22 @@ public:
 	float mHingeMotorVelocity = 0.0f;
 	float mHingeMotorForce = 0.0f;
 
+	/// Prismatic target frame, reference-object origin and local sliding direction.
+	Vec3 mSlidingReferenceOrigin = Vec3::sZero();
+	Vec3 mSlidingAxis = Vec3::sAxisX();
+	bool mSlidingLimitEnabled = false;
+	float mSlidingLimitMin = 0.0f;
+	float mSlidingLimitMax = 0.0f;
+	float mSlidingMotorVelocity = 0.0f;
+	float mSlidingMotorForce = 0.0f;
+	float mSlidingMotorEpsilon = 0.2f;
+
+	/// Pulley fixed points are expressed in Havana world coordinates.
+	Vec3 mPulleyFixedPoint1 = Vec3::sZero();
+	Vec3 mPulleyFixedPoint2 = Vec3::sZero();
+	float mPulleyRatio = 1.0f;
+	bool mPulleyIsRigid = false;
+
 protected:
 	void RestoreBinaryState( StreamIn &stream ) override;
 };
@@ -121,6 +140,7 @@ public:
 	EHavanaConstraintKind GetHavanaKind() const { return mSettings.mKind; }
 	void SetRagdollFriction( float maxAngularImpulse );
 	void SetHingeMotor( float angularVelocity, float maxAngularForce );
+	void SetSlidingMotor( float velocity, float maxForce, float epsilon = 1.0f );
 	void UpdateRagdollTransforms( Mat44Arg frame1Havana, Mat44Arg frame2Havana );
 	Mat44 GetOriginalRagdollFrame1() const { return mOriginalRagdollFrame1; }
 	Mat44 GetOriginalRagdollFrame2() const { return mOriginalRagdollFrame2; }
@@ -230,6 +250,24 @@ private:
 		float mAngle = 0.0f;
 	};
 
+	struct BallSocketSolverStorage
+	{
+		BallSocketSolverStorage() { mCorrection.SetZero(); }
+		BodySolverData mBodies;
+		PreciseJacobianSystem< 3 > mJacobian;
+		Vector< 3 > mCorrection;
+	};
+
+	struct SlidingSolverStorage
+	{
+		SlidingSolverStorage() { mCorrection.SetZero(); }
+		BodySolverData mBodies;
+		PreciseJacobianSystem< 5 > mJacobian;
+		Vector< 5 > mCorrection;
+		JacobianSystem< 1 > mLimitJacobian;
+		float mPosition = 0.0f;
+	};
+
 	struct RagdollLimit
 	{
 		bool mLimitEnabled = true;
@@ -243,6 +281,14 @@ private:
 	};
 
 	void BuildRagdollRuntime();
+	void BuildSlidingRuntime();
+	bool SetupBallSocket( float deltaTime, BallSocketSolverStorage &storage );
+	bool SolveBallSocket( BallSocketSolverStorage &storage, float tauFactor, float dampingFactor );
+	bool SetupSliding( float deltaTime, SlidingSolverStorage &storage );
+	bool SolveSliding( float deltaTime, SlidingSolverStorage &storage, float tauFactor, float dampingFactor );
+	bool SolveSlidingLinearLimit( float deltaTime, const SlidingSolverStorage &storage,
+		float tauFactor, float dampingFactor );
+	bool SetupPulley( float deltaTime, LengthSolverStorage &storage );
 	bool SetupHinge( float deltaTime, HingeSolverStorage &storage );
 	bool SolveHinge( float deltaTime, HingeSolverStorage &storage,
 		float tauFactor, float dampingFactor, bool firstSolve );
@@ -277,6 +323,8 @@ private:
 	Mat44 mRagdollFrame2 { Mat44::sIdentity() };
 	std::array< RagdollLimit, 3 > mRagdollLimits;
 	RagdollLimit mHingeLimit;
+	RagdollLimit mSlidingLimit;
+	float mSlidingPositionInterpolation = 0.0f;
 	std::array< uint8, 3 > mRagdollAxisMap { 0, 1, 2 };
 	float mRagdollConeCenter = 0.0f;
 	uint64 mBodyPropertiesRevision = 0;

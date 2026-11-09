@@ -115,6 +115,24 @@ void HavanaConstraintSettings::SaveBinaryState( StreamOut &stream ) const
 		stream.Write( mHingeMotorVelocity );
 		stream.Write( mHingeMotorForce );
 	}
+	else if ( mKind == EHavanaConstraintKind::Sliding )
+	{
+		stream.Write( mSlidingReferenceOrigin );
+		stream.Write( mSlidingAxis );
+		stream.Write( mSlidingLimitEnabled );
+		stream.Write( mSlidingLimitMin );
+		stream.Write( mSlidingLimitMax );
+		stream.Write( mSlidingMotorVelocity );
+		stream.Write( mSlidingMotorForce );
+		stream.Write( mSlidingMotorEpsilon );
+	}
+	else if ( mKind == EHavanaConstraintKind::Pulley )
+	{
+		stream.Write( mPulleyFixedPoint1 );
+		stream.Write( mPulleyFixedPoint2 );
+		stream.Write( mPulleyRatio );
+		stream.Write( mPulleyIsRigid );
+	}
 }
 
 void HavanaConstraintSettings::RestoreBinaryState( StreamIn &stream )
@@ -140,6 +158,24 @@ void HavanaConstraintSettings::RestoreBinaryState( StreamIn &stream )
 		stream.Read( mHingeLimitMax );
 		stream.Read( mHingeMotorVelocity );
 		stream.Read( mHingeMotorForce );
+	}
+	else if ( mKind == EHavanaConstraintKind::Sliding )
+	{
+		stream.Read( mSlidingReferenceOrigin );
+		stream.Read( mSlidingAxis );
+		stream.Read( mSlidingLimitEnabled );
+		stream.Read( mSlidingLimitMin );
+		stream.Read( mSlidingLimitMax );
+		stream.Read( mSlidingMotorVelocity );
+		stream.Read( mSlidingMotorForce );
+		stream.Read( mSlidingMotorEpsilon );
+	}
+	else if ( mKind == EHavanaConstraintKind::Pulley )
+	{
+		stream.Read( mPulleyFixedPoint1 );
+		stream.Read( mPulleyFixedPoint2 );
+		stream.Read( mPulleyRatio );
+		stream.Read( mPulleyIsRigid );
 	}
 }
 
@@ -454,6 +490,8 @@ HavanaConstraint::HavanaConstraint( Body &body1, Body &body2, const HavanaConstr
 		// Havana initializes the motor reference at zero. init_angular_limit only
 		// unwraps a nonzero reference against the creation angle; it does not reset it.
 	}
+	else if ( mSettings.mKind == EHavanaConstraintKind::Sliding )
+		BuildSlidingRuntime();
 }
 
 void HavanaConstraint::NotifyShapeChanged( const BodyID &bodyID, Vec3Arg deltaCOM )
@@ -461,6 +499,8 @@ void HavanaConstraint::NotifyShapeChanged( const BodyID &bodyID, Vec3Arg deltaCO
 	const Vec3 deltaHavana = HavanaFromSourceVector( deltaCOM );
 	Mat44 *frame = mBody1->GetID() == bodyID ? &mSettings.mFrame1 : &mSettings.mFrame2;
 	frame->SetTranslation( frame->GetTranslation() - deltaHavana );
+	if ( mSettings.mKind == EHavanaConstraintKind::Sliding && mBody1->GetID() == bodyID )
+		mSettings.mSlidingReferenceOrigin -= deltaHavana;
 
 	if ( mSettings.mKind == EHavanaConstraintKind::Ragdoll )
 	{
@@ -503,9 +543,12 @@ size_t HavanaConstraint::GetLegacySolverStorageSize() const
 	switch ( mSettings.mKind )
 	{
 		case EHavanaConstraintKind::Fixed: return sizeof( FixedSolverStorage );
-		case EHavanaConstraintKind::Length: return sizeof( LengthSolverStorage );
+		case EHavanaConstraintKind::Length:
+		case EHavanaConstraintKind::Pulley: return sizeof( LengthSolverStorage );
 		case EHavanaConstraintKind::Ragdoll: return sizeof( RagdollSolverStorage );
 		case EHavanaConstraintKind::Hinge: return sizeof( HingeSolverStorage );
+		case EHavanaConstraintKind::BallSocket: return sizeof( BallSocketSolverStorage );
+		case EHavanaConstraintKind::Sliding: return sizeof( SlidingSolverStorage );
 	}
 	return 0;
 }
@@ -515,9 +558,12 @@ size_t HavanaConstraint::GetLegacySolverStorageAlignment() const
 	switch ( mSettings.mKind )
 	{
 		case EHavanaConstraintKind::Fixed: return alignof( FixedSolverStorage );
-		case EHavanaConstraintKind::Length: return alignof( LengthSolverStorage );
+		case EHavanaConstraintKind::Length:
+		case EHavanaConstraintKind::Pulley: return alignof( LengthSolverStorage );
 		case EHavanaConstraintKind::Ragdoll: return alignof( RagdollSolverStorage );
 		case EHavanaConstraintKind::Hinge: return alignof( HingeSolverStorage );
+		case EHavanaConstraintKind::BallSocket: return alignof( BallSocketSolverStorage );
+		case EHavanaConstraintKind::Sliding: return alignof( SlidingSolverStorage );
 	}
 	return 1;
 }
@@ -527,9 +573,12 @@ void HavanaConstraint::InitializeLegacySolverStorage( void *storage ) const
 	switch ( mSettings.mKind )
 	{
 		case EHavanaConstraintKind::Fixed: new ( storage ) FixedSolverStorage(); break;
-		case EHavanaConstraintKind::Length: new ( storage ) LengthSolverStorage(); break;
+		case EHavanaConstraintKind::Length:
+		case EHavanaConstraintKind::Pulley: new ( storage ) LengthSolverStorage(); break;
 		case EHavanaConstraintKind::Ragdoll: new ( storage ) RagdollSolverStorage(); break;
 		case EHavanaConstraintKind::Hinge: new ( storage ) HingeSolverStorage(); break;
+		case EHavanaConstraintKind::BallSocket: new ( storage ) BallSocketSolverStorage(); break;
+		case EHavanaConstraintKind::Sliding: new ( storage ) SlidingSolverStorage(); break;
 	}
 }
 
@@ -538,9 +587,12 @@ void HavanaConstraint::DestroyLegacySolverStorage( void *storage ) const
 	switch ( mSettings.mKind )
 	{
 		case EHavanaConstraintKind::Fixed: static_cast< FixedSolverStorage * >( storage )->~FixedSolverStorage(); break;
-		case EHavanaConstraintKind::Length: static_cast< LengthSolverStorage * >( storage )->~LengthSolverStorage(); break;
+		case EHavanaConstraintKind::Length:
+		case EHavanaConstraintKind::Pulley: static_cast< LengthSolverStorage * >( storage )->~LengthSolverStorage(); break;
 		case EHavanaConstraintKind::Ragdoll: static_cast< RagdollSolverStorage * >( storage )->~RagdollSolverStorage(); break;
 		case EHavanaConstraintKind::Hinge: static_cast< HingeSolverStorage * >( storage )->~HingeSolverStorage(); break;
+		case EHavanaConstraintKind::BallSocket: static_cast< BallSocketSolverStorage * >( storage )->~BallSocketSolverStorage(); break;
+		case EHavanaConstraintKind::Sliding: static_cast< SlidingSolverStorage * >( storage )->~SlidingSolverStorage(); break;
 	}
 }
 
@@ -583,10 +635,12 @@ bool HavanaConstraint::SetupAndSolveLegacyVelocityConstraint( void *storage, flo
 			break;
 		}
 		case EHavanaConstraintKind::Length:
+		case EHavanaConstraintKind::Pulley:
 		{
 			auto &work = *static_cast< LengthSolverStorage * >( storage );
 			PrepareBodySolverData( work.mBodies );
-			setup = SetupLength( deltaTime, work );
+			setup = mSettings.mKind == EHavanaConstraintKind::Length
+				? SetupLength( deltaTime, work ) : SetupPulley( deltaTime, work );
 			if ( setup ) applied = SolveLength( work, tauFactor, dampingFactor );
 			break;
 		}
@@ -607,6 +661,22 @@ bool HavanaConstraint::SetupAndSolveLegacyVelocityConstraint( void *storage, flo
 			if ( setup ) applied = SolveHinge( deltaTime, work, tauFactor, dampingFactor, true );
 			break;
 		}
+		case EHavanaConstraintKind::BallSocket:
+		{
+			auto &work = *static_cast< BallSocketSolverStorage * >( storage );
+			PrepareBodySolverData( work.mBodies );
+			setup = SetupBallSocket( deltaTime, work );
+			if ( setup ) applied = SolveBallSocket( work, tauFactor, dampingFactor );
+			break;
+		}
+		case EHavanaConstraintKind::Sliding:
+		{
+			auto &work = *static_cast< SlidingSolverStorage * >( storage );
+			PrepareBodySolverData( work.mBodies );
+			setup = SetupSliding( deltaTime, work );
+			if ( setup ) applied = SolveSliding( deltaTime, work, tauFactor, dampingFactor );
+			break;
+		}
 	}
 	return applied;
 }
@@ -616,8 +686,12 @@ bool HavanaConstraint::StepLegacyVelocityConstraint( void *storage, float deltaT
 {
 	const BodySolverData *bodies = mSettings.mKind == EHavanaConstraintKind::Fixed
 		? &static_cast<FixedSolverStorage *>( storage )->mBodies
-		: mSettings.mKind == EHavanaConstraintKind::Length
+		: mSettings.mKind == EHavanaConstraintKind::Length || mSettings.mKind == EHavanaConstraintKind::Pulley
 			? &static_cast<LengthSolverStorage *>( storage )->mBodies
+			: mSettings.mKind == EHavanaConstraintKind::BallSocket
+				? &static_cast<BallSocketSolverStorage *>( storage )->mBodies
+				: mSettings.mKind == EHavanaConstraintKind::Sliding
+					? &static_cast<SlidingSolverStorage *>( storage )->mBodies
 			: mSettings.mKind == EHavanaConstraintKind::Hinge
 				? &static_cast<HingeSolverStorage *>( storage )->mBodies
 				: &static_cast<RagdollSolverStorage *>( storage )->mBodies;
@@ -631,6 +705,7 @@ bool HavanaConstraint::StepLegacyVelocityConstraint( void *storage, float deltaT
 				tauFactor, dampingFactor, false );
 			break;
 		case EHavanaConstraintKind::Length:
+		case EHavanaConstraintKind::Pulley:
 			applied = SolveLength( *static_cast< LengthSolverStorage * >( storage ),
 				tauFactor, dampingFactor );
 			break;
@@ -641,6 +716,12 @@ bool HavanaConstraint::StepLegacyVelocityConstraint( void *storage, float deltaT
 		case EHavanaConstraintKind::Hinge:
 			applied = SolveHinge( deltaTime, *static_cast< HingeSolverStorage * >( storage ),
 				tauFactor, dampingFactor, false );
+			break;
+		case EHavanaConstraintKind::BallSocket:
+			applied = SolveBallSocket( *static_cast< BallSocketSolverStorage * >( storage ), tauFactor, dampingFactor );
+			break;
+		case EHavanaConstraintKind::Sliding:
+			applied = SolveSliding( deltaTime, *static_cast< SlidingSolverStorage * >( storage ), tauFactor, dampingFactor );
 			break;
 	}
 	return applied;
@@ -730,6 +811,11 @@ void HavanaConstraint::SaveState( StateRecorder &stream ) const
 		stream.Write( limit.mReferencePosition );
 	if ( mSettings.mKind == EHavanaConstraintKind::Hinge )
 		stream.Write( mHingeLimit.mReferencePosition );
+	else if ( mSettings.mKind == EHavanaConstraintKind::Sliding )
+	{
+		stream.Write( mSlidingLimit.mReferencePosition );
+		stream.Write( mSlidingPositionInterpolation );
+	}
 }
 
 void HavanaConstraint::RestoreState( StateRecorder &stream )
@@ -739,6 +825,11 @@ void HavanaConstraint::RestoreState( StateRecorder &stream )
 		stream.Read( limit.mReferencePosition );
 	if ( mSettings.mKind == EHavanaConstraintKind::Hinge )
 		stream.Read( mHingeLimit.mReferencePosition );
+	else if ( mSettings.mKind == EHavanaConstraintKind::Sliding )
+	{
+		stream.Read( mSlidingLimit.mReferencePosition );
+		stream.Read( mSlidingPositionInterpolation );
+	}
 }
 
 #ifdef JPH_DEBUG_RENDERER
@@ -913,6 +1004,200 @@ bool HavanaConstraint::SolveLength( LengthSolverStorage &storage, float tauFacto
 	return storage.mJacobian.ApplyImpulse( *mBody1, *mBody2, lambda,
 		storage.mBodies.mInverseMass1, storage.mBodies.mInverseMass2,
 		storage.mBodies.mInverseInertiaSource1, storage.mBodies.mInverseInertiaSource2 );
+}
+
+bool HavanaConstraint::SetupBallSocket( float deltaTime, BallSocketSolverStorage &storage )
+{
+	storage.mJacobian.mValid = false;
+	if ( deltaTime <= 0.0f )
+		return false;
+	const Mat44 rotation1 = HavanaFromSourceTransform( Mat44::sRotation( mBody1->GetRotation() ) );
+	const Mat44 rotation2 = HavanaFromSourceTransform( Mat44::sRotation( mBody2->GetRotation() ) );
+	const Vec3 relative1 = rotation1.Multiply3x3( mSettings.mFrame1.GetTranslation() );
+	const Vec3 relative2 = rotation2.Multiply3x3( mSettings.mFrame2.GetTranslation() );
+	const Vec3 separation = HavanaFromSourceVector( Vec3(
+		mBody2->GetCenterOfMassPosition() - mBody1->GetCenterOfMassPosition() ) ) + relative2 - relative1;
+	const Vec3 axes[3] = { Vec3::sAxisX(), Vec3::sAxisY(), Vec3::sAxisZ() };
+	for ( uint axis = 0; axis < 3; ++axis )
+	{
+		JacobianRow &row = storage.mJacobian.mRows[axis];
+		row.mLinear1 = axes[axis];
+		row.mLinear2 = -axes[axis];
+		row.mAngular1 = relative1.Cross( row.mLinear1 );
+		row.mAngular2 = relative2.Cross( row.mLinear2 );
+		storage.mCorrection[axis] = separation[axis] / deltaTime;
+	}
+	return storage.mJacobian.Setup( *mBody1, *mBody2,
+		storage.mBodies.mInverseMass1, storage.mBodies.mInverseMass2,
+		storage.mBodies.mInverseInertiaHavana1, storage.mBodies.mInverseInertiaHavana2, true );
+}
+
+bool HavanaConstraint::SolveBallSocket( BallSocketSolverStorage &storage, float tauFactor, float dampingFactor )
+{
+	return storage.mJacobian.SolveAndApply( *mBody1, *mBody2, storage.mCorrection,
+		mSettings.mTau * tauFactor, mSettings.mStrength * dampingFactor, storage.mBodies );
+}
+
+void HavanaConstraint::SetSlidingMotor( float velocity, float maxForce, float epsilon )
+{
+	if ( mSettings.mKind != EHavanaConstraintKind::Sliding )
+		return;
+	mSettings.mSlidingMotorVelocity = velocity;
+	mSettings.mSlidingMotorForce = std::fabs( maxForce );
+	mSettings.mSlidingMotorEpsilon = epsilon;
+	mSlidingLimit.mFrictionEnabled = maxForce != 0.0f;
+	mSlidingLimit.mDesiredVelocity = epsilon * velocity;
+	mSlidingLimit.mJointFriction = epsilon * mSettings.mSlidingMotorForce;
+}
+
+void HavanaConstraint::BuildSlidingRuntime()
+{
+	mSettings.mSlidingAxis = mSettings.mSlidingAxis.NormalizedOr( Vec3::sAxisX() );
+	mSlidingLimit.mLimitEnabled = mSettings.mSlidingLimitEnabled;
+	mSlidingLimit.mLimitMin = mSettings.mSlidingLimitMin;
+	mSlidingLimit.mLimitMax = mSettings.mSlidingLimitMax;
+	SetSlidingMotor( mSettings.mSlidingMotorVelocity, mSettings.mSlidingMotorForce, mSettings.mSlidingMotorEpsilon );
+	const float inverseMass1 = mBody1->IsDynamic() ? mBody1->GetMotionProperties()->GetInverseMass() : 0.0f;
+	const float inverseMass2 = mBody2->IsDynamic() ? mBody2->GetMotionProperties()->GetInverseMass() : 0.0f;
+	mSlidingPositionInterpolation = inverseMass1 == 0.0f ? 1.0f
+		: inverseMass2 == 0.0f ? 0.0f : inverseMass1 / ( inverseMass1 + inverseMass2 );
+	const Mat44 transform1 = HavanaFromSourceTransform( Mat44::sRotation( mBody1->GetRotation() ) );
+	const Mat44 transform2 = HavanaFromSourceTransform( Mat44::sRotationTranslation(
+		mBody2->GetRotation(), Vec3( mBody2->GetCenterOfMassPosition() - mBody1->GetCenterOfMassPosition() ) ) );
+	const Vec3 origin1 = Vec3( transform1 * mSettings.mSlidingReferenceOrigin );
+	const Vec3 origin2 = Vec3( transform2 * mSettings.mFrame2.GetTranslation() );
+	// Havana's creation reference subtracts the local translation before its later rotated updates.
+	const Vec3 initialDelta = origin2 - origin1 - ( mSettings.mFrame1.GetTranslation() - mSettings.mSlidingReferenceOrigin );
+	mSlidingLimit.mReferencePosition = initialDelta.Dot( transform1.Multiply3x3( mSettings.mSlidingAxis ) );
+}
+
+bool HavanaConstraint::SetupSliding( float deltaTime, SlidingSolverStorage &storage )
+{
+	storage.mJacobian.mValid = false;
+	storage.mLimitJacobian.mValid = false;
+	if ( deltaTime <= 0.0f )
+		return false;
+	const Mat44 transform1 = HavanaFromSourceTransform( Mat44::sRotation( mBody1->GetRotation() ) );
+	const Mat44 transform2 = HavanaFromSourceTransform( Mat44::sRotationTranslation(
+		mBody2->GetRotation(), Vec3( mBody2->GetCenterOfMassPosition() - mBody1->GetCenterOfMassPosition() ) ) );
+	const Vec3 origin1 = Vec3( transform1 * mSettings.mSlidingReferenceOrigin );
+	const Vec3 origin2 = Vec3( transform2 * mSettings.mFrame2.GetTranslation() );
+	const Vec3 anchor = origin1 + mSlidingPositionInterpolation * ( origin2 - origin1 );
+	const Vec3 relative1 = anchor;
+	const Vec3 relative2 = anchor - transform2.GetTranslation();
+	const Vec3 axis = transform1.Multiply3x3( mSettings.mSlidingAxis );
+	const Vec3 perpendicular = ( std::fabs( mSettings.mSlidingAxis.GetX() ) < 0.57f
+		? Vec3::sAxisX() : Vec3::sAxisY() ).Cross( mSettings.mSlidingAxis ).Normalized();
+	const Vec3 normals[2] = { transform1.Multiply3x3( perpendicular ), axis.Cross( transform1.Multiply3x3( perpendicular ) ) };
+	const Vec3 positionError = origin2 - Vec3( transform1 * mSettings.mFrame1.GetTranslation() );
+	storage.mPosition = axis.Dot( positionError );
+	const Quat relativeRotation = transform2.Multiply3x3LeftTransposed( transform1 ).GetQuaternion();
+	const Quat rotationError = mSettings.mFrame1.GetQuaternion() * relativeRotation;
+	const float rotationFactor = ( relativeRotation.GetW() > 0.0f ? -2.0f : 2.0f ) / deltaTime;
+	for ( uint i = 0; i < 3; ++i )
+	{
+		JacobianRow &row = storage.mJacobian.mRows[i];
+		row.mAngular1 = MatrixAxis( transform1, i );
+		row.mAngular2 = -row.mAngular1;
+		storage.mCorrection[i] = rotationFactor * rotationError.GetXYZ()[i];
+	}
+	for ( uint i = 0; i < 2; ++i )
+	{
+		JacobianRow &row = storage.mJacobian.mRows[3 + i];
+		row.mLinear1 = normals[i];
+		row.mLinear2 = -normals[i];
+		row.mAngular1 = relative1.Cross( row.mLinear1 );
+		row.mAngular2 = relative2.Cross( row.mLinear2 );
+		storage.mCorrection[3 + i] = positionError.Dot( normals[i] ) / deltaTime;
+	}
+	JacobianRow &limitRow = storage.mLimitJacobian.mRows[0];
+	limitRow.mLinear1 = axis;
+	limitRow.mLinear2 = -axis;
+	limitRow.mAngular1 = relative1.Cross( axis );
+	limitRow.mAngular2 = relative2.Cross( -axis );
+	storage.mLimitJacobian.Setup( *mBody1, *mBody2,
+		storage.mBodies.mInverseMass1, storage.mBodies.mInverseMass2,
+		storage.mBodies.mInverseInertiaHavana1, storage.mBodies.mInverseInertiaHavana2 );
+	return storage.mJacobian.Setup( *mBody1, *mBody2,
+		storage.mBodies.mInverseMass1, storage.mBodies.mInverseMass2,
+		storage.mBodies.mInverseInertiaHavana1, storage.mBodies.mInverseInertiaHavana2, true );
+}
+
+bool HavanaConstraint::SolveSlidingLinearLimit( float deltaTime, const SlidingSolverStorage &storage,
+	float tauFactor, float dampingFactor )
+{
+	if ( !storage.mLimitJacobian.mValid || ( !mSlidingLimit.mFrictionEnabled && !mSlidingLimit.mLimitEnabled ) )
+		return false;
+	const float virtualMass = storage.mLimitJacobian.mEffectiveMass( 0, 0 );
+	const float velocity = storage.mLimitJacobian.GetVelocity( *mBody1, *mBody2 )[0];
+	float impulse = 0.0f;
+	if ( mSlidingLimit.mFrictionEnabled )
+	{
+		const float error = storage.mPosition - mSlidingLimit.mReferencePosition;
+		mSlidingLimit.mReferencePosition += mSlidingLimit.mDesiredVelocity * deltaTime;
+		impulse = virtualMass * ( error * 0.8f * tauFactor / deltaTime - dampingFactor * velocity );
+		if ( std::fabs( impulse ) / deltaTime > mSlidingLimit.mJointFriction )
+		{
+			const float factor = mSlidingLimit.mJointFriction * deltaTime / std::fabs( impulse );
+			impulse *= factor;
+			mSlidingLimit.mReferencePosition += ( 1.0f - factor ) * error;
+		}
+	}
+	if ( mSlidingLimit.mLimitEnabled )
+	{
+		const float nextPosition = storage.mPosition - ( velocity + impulse / virtualMass ) * deltaTime;
+		if ( nextPosition > mSlidingLimit.mLimitMax )
+			impulse += virtualMass * ( nextPosition - mSlidingLimit.mLimitMax ) * tauFactor / deltaTime;
+		else if ( nextPosition < mSlidingLimit.mLimitMin )
+			impulse += virtualMass * ( nextPosition - mSlidingLimit.mLimitMin ) * tauFactor / deltaTime;
+	}
+	Vector< 1 > lambda; lambda[0] = impulse;
+	return storage.mLimitJacobian.ApplyImpulse( *mBody1, *mBody2, lambda,
+		storage.mBodies.mInverseMass1, storage.mBodies.mInverseMass2,
+		storage.mBodies.mInverseInertiaSource1, storage.mBodies.mInverseInertiaSource2 );
+}
+
+bool HavanaConstraint::SolveSliding( float deltaTime, SlidingSolverStorage &storage, float tauFactor, float dampingFactor )
+{
+	if ( !storage.mJacobian.mValid )
+		return false;
+	bool applied = SolveSlidingLinearLimit( deltaTime, storage, tauFactor, dampingFactor );
+	applied |= storage.mJacobian.SolveAndApply( *mBody1, *mBody2, storage.mCorrection,
+		mSettings.mTau * tauFactor, mSettings.mStrength * dampingFactor, storage.mBodies );
+	return applied;
+}
+
+bool HavanaConstraint::SetupPulley( float deltaTime, LengthSolverStorage &storage )
+{
+	storage.mJacobian.mValid = false;
+	storage.mSkipSolve = true;
+	if ( deltaTime <= 0.0f )
+		return false;
+	const Vec3 relative1 = HavanaFromSourceVector( mBody1->GetRotation() * SourceFromHavanaVector( mSettings.mFrame1.GetTranslation() ) );
+	const Vec3 relative2 = HavanaFromSourceVector( mBody2->GetRotation() * SourceFromHavanaVector( mSettings.mFrame2.GetTranslation() ) );
+	Vec3 direction1 = HavanaFromSourceVector( Vec3( RVec3( SourceFromHavanaVector( mSettings.mPulleyFixedPoint1 ) )
+		- mBody1->GetCenterOfMassPosition() ) ) - relative1;
+	Vec3 direction2 = mSettings.mPulleyRatio * ( HavanaFromSourceVector( Vec3( RVec3(
+		SourceFromHavanaVector( mSettings.mPulleyFixedPoint2 ) ) - mBody2->GetCenterOfMassPosition() ) ) - relative2 );
+	const float length1 = direction1.Length(), length2 = direction2.Length();
+	const float error = length1 + length2 - mSettings.mMaxLength;
+	if ( !mSettings.mPulleyIsRigid && error < 0.0f )
+		return true;
+	direction1 = direction1.NormalizedOr( Vec3::sZero() );
+	direction2 = direction2.NormalizedOr( Vec3::sZero() );
+	JacobianRow &row = storage.mJacobian.mRows[0];
+	row.mLinear1 = direction1;
+	row.mLinear2 = direction2;
+	row.mAngular1 = relative1.Cross( direction1 );
+	row.mAngular2 = relative2.Cross( direction2 );
+	// Havana normalizes the geared second direction before building its unit Jacobian.
+	if ( !storage.mJacobian.Setup( *mBody1, *mBody2,
+		storage.mBodies.mInverseMass1, storage.mBodies.mInverseMass2,
+		storage.mBodies.mInverseInertiaHavana1, storage.mBodies.mInverseInertiaHavana2 ) )
+		return false;
+	storage.mCorrection[0] = error / deltaTime;
+	storage.mSkipSolve = false;
+	return true;
 }
 
 void HavanaConstraint::BuildRagdollRuntime()
@@ -1215,9 +1500,15 @@ bool HavanaConstraint::SolveRagdollAngularLimit( int limitIndex, Vec3Arg axisHav
 		float angleError = limit.mReferencePosition - angle;
 		limit.mReferencePosition += limit.mDesiredVelocity * deltaTime;
 		if ( angleError > JPH_PI )
+		{
 			angleError -= 2.0f * JPH_PI;
-		else if ( angleError < -JPH_PI )
+			angle += 2.0f * JPH_PI;
+		}
+		if ( angleError < -JPH_PI )
+		{
 			angleError += 2.0f * JPH_PI;
+			angle -= 2.0f * JPH_PI;
+		}
 		impulse = virtualMass * ( angleError * 0.8f * tauFactor / deltaTime - dampingFactor * relativeVelocity );
 		if ( std::fabs( impulse ) / deltaTime > limit.mJointFriction )
 		{
