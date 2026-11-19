@@ -33,6 +33,7 @@ inline constexpr const char *BackendModuleNames[] = {
     "vphysics_jolt_sse2.so",
     "vphysics_jolt.so",
     "vphysics.so",
+    "vphysics_srv.so",
 };
 #endif
 

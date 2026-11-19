@@ -18,6 +18,7 @@ Developed by [schweiziske](https://github.com/schweiziske), building on [Volt (V
 | Windows 64-bit, `x86-64` beta branch | Supported |
 | Windows 32-bit | Supported |
 | Windows 64-bit, default branch | Supported |
+| Linux 32-bit dedicated server, default branch | Supported |
 | Linux 64-bit dedicated server, `x86-64` beta branch | Supported |
 | Other Linux builds, macOS | Not supported yet |
 
