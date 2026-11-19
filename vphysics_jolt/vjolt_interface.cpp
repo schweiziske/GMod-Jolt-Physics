@@ -10,7 +10,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <thread>
-#include <Windows.h>
+#ifdef __linux__
+#include <sched.h>
+#endif
 #include <vjolt/cpu_policy.h>
 
 #include "vjolt_environment.h"
@@ -48,6 +50,7 @@ static uint64 g_nReportedTempAllocationFailures = 0;
 static uint32 ActiveProcessorCount()
 {
 	if (const auto count=VJoltCPU::Get().WorkerCount()) return count + (VJoltCPU::Get().owner ? 1u : 0u);
+#ifdef _WIN32
 	DWORD_PTR processMask = 0;
 	DWORD_PTR systemMask = 0;
 	if ( GetProcessAffinityMask( GetCurrentProcess(), &processMask, &systemMask ) && processMask )
@@ -57,6 +60,11 @@ static uint32 ActiveProcessorCount()
 			count += uint32( mask & 1 );
 		return Max( count, 1u );
 	}
+#elif defined( __linux__ )
+	cpu_set_t cpus;
+	if ( sched_getaffinity( 0, sizeof( cpus ), &cpus ) == 0 )
+		return Max( uint32( CPU_COUNT( &cpus ) ), 1u );
+#endif
 	return Max( std::thread::hardware_concurrency(), 1u );
 }
 

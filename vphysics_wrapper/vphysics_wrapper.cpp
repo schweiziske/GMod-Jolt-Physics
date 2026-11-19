@@ -20,6 +20,8 @@
 #endif
 #else
 #include <cpuid.h>
+#include <dlfcn.h>
+#include <string>
 #endif
 
 // memdbgon must be the last include file in a .cpp file!!!
@@ -165,6 +167,17 @@ bool PhysicsWrapper::InitWrapper()
 		return false;
 	std::memcpy( separator + 1, pModuleName, nameLength + 1 );
 	pModuleName = modulePath;
+#elif defined( __linux__ )
+	Dl_info wrapperInfo{};
+	if ( !dladdr( &s_PhysicsInterface, &wrapperInfo ) || !wrapperInfo.dli_fname )
+		return false;
+	std::string modulePath( wrapperInfo.dli_fname );
+	const auto separator = modulePath.find_last_of( '/' );
+	if ( separator == std::string::npos )
+		return false;
+	modulePath.resize( separator + 1 );
+	modulePath += pModuleName;
+	pModuleName = modulePath.c_str();
 #endif
 
 	if ( !Sys_LoadInterface( pModuleName, VPHYSICS_INTERFACE_VERSION, &m_pActualPhysicsModule, (void **)&m_pActualPhysicsInterface ) )

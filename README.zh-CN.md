@@ -18,7 +18,8 @@ GMod Jolt Physics 用 [Jolt Physics](https://github.com/jrouwe/JoltPhysics) 替�
 | Windows 64 位，`x86-64` 测试分支 | 支持 |
 | Windows 32 位 | 支持 |
 | Windows 64 位，默认分支 | 支持 |
-| Linux、macOS |  暂时不支持 |
+| Linux 64 位专用服务器，`x86-64` 测试分支 | 支持 |
+| 其他 Linux 版本、macOS | 暂时不支持 |
 
 默认分支（公开版）和 `x86-64` 测试分支都有 64 位版本，但两者的二进制接口（ABI）不同，**64 位 DLL 不能混用**。请按游戏版本选择安装包：
 

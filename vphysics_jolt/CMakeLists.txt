@@ -6,10 +6,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 enable_testing()
 # Match the GMod SDK static libraries and Source's per-module memoverride.
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
-if(NOT MSVC OR NOT (CMAKE_SIZEOF_VOID_P EQUAL 4 OR CMAKE_SIZEOF_VOID_P EQUAL 8))
-  message(FATAL_ERROR "This build requires MSVC Win32 or x64")
+if(WIN32 AND MSVC AND CMAKE_SIZEOF_VOID_P MATCHES "^[48]$")
+  set(volt_linux FALSE)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64)$"
+    AND CMAKE_SIZEOF_VOID_P EQUAL 8)
+  set(volt_linux TRUE)
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+else()
+  message(FATAL_ERROR "Supported targets are MSVC Win32/x64 and Linux x86-64")
 endif()
-
 set(VOLT_ENGINE_BRANCH "gmod" CACHE STRING "SDK ABI: gmod or sdk2013")
 set_property(CACHE VOLT_ENGINE_BRANCH PROPERTY STRINGS gmod sdk2013)
 if(NOT VOLT_ENGINE_BRANCH MATCHES "^(gmod|sdk2013)$")
@@ -18,6 +23,15 @@ endif()
 set(VOLT_GMOD_SDK "" CACHE PATH "Source/GMod SDK src directory")
 if(NOT EXISTS "${VOLT_GMOD_SDK}/public/vphysics_interface.h")
   message(FATAL_ERROR "Set VOLT_GMOD_SDK to the complete Source/GMod SDK src directory")
+endif()
+if(volt_linux)
+  if(NOT VOLT_ENGINE_BRANCH STREQUAL "gmod" OR NOT EXISTS "${VOLT_GMOD_SDK}/public/gmod_sdk_branch.h")
+    message(FATAL_ERROR "Linux requires gmod/src from gmod-project-sdk")
+  endif()
+  set(SOURCE_SDK_PROFILE gmod-beta CACHE STRING "Source SDK interface family")
+  if(NOT SOURCE_SDK_PROFILE STREQUAL "gmod-beta")
+    message(FATAL_ERROR "Linux x86-64 requires the gmod-beta SDK profile")
+  endif()
 endif()
 if(CMAKE_SIZEOF_VOID_P EQUAL 8)
   set(volt_sdk_libdir "${VOLT_GMOD_SDK}/lib/public/x64")
@@ -113,6 +127,10 @@ endif()
 set(JPH_USE_DX12 OFF CACHE BOOL "" FORCE)
 set(JPH_USE_VK OFF CACHE BOOL "" FORCE)
 set(ENABLE_INSTALL OFF CACHE BOOL "" FORCE)
+if(volt_linux)
+  # The adapter uses C++ RTTI for Jolt classes and derives from several of them.
+  set(CPP_RTTI_ENABLED ON CACHE BOOL "" FORCE)
+endif()
 if(VOLT_ENGINE_BRANCH STREQUAL "sdk2013")
   set(DISABLE_CUSTOM_ALLOCATOR ON CACHE BOOL "" FORCE)
 else()
@@ -148,28 +166,33 @@ function(volt_configure_module target)
     "${VOLT_ROOT}/vphysics_jolt" "${VOLT_ROOT}/vphysics_jolt/compat"
     "${VOLT_GMOD_SDK}/public" "${VOLT_GMOD_SDK}/public/tier0"
     "${VOLT_GMOD_SDK}/public/tier1")
-  target_compile_definitions(${target} PRIVATE
-    NOMINMAX WIN32 _WINDOWS COMPILER_MSVC ${VOLT_GMOD_PLATFORM_DEFINITIONS}
-    GAME_SDK2013=1 _USRDLL DLLNAME=${target}
-    _DLL_EXT=.dll
-    _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE)
-  if(CMAKE_SIZEOF_VOID_P EQUAL 8)
-    target_compile_definitions(${target} PRIVATE WIN64 _WIN64 COMPILER_MSVC64 PLATFORM_64BITS=1)
+  target_compile_definitions(${target} PRIVATE GAME_SDK2013=1 DLLNAME=${target})
+  if(volt_linux)
+    # Keep Source's per-module globals and allocator symbols local to each ELF.
+    set(exports "${VOLT_ROOT}/vphysics_jolt/compat/linux.exports")
+    target_link_options(${target} PRIVATE "LINKER:--version-script=${exports}" "LINKER:--no-undefined")
+    set_target_properties(${target} PROPERTIES LINK_DEPENDS "${exports}" BUILD_WITH_INSTALL_RPATH ON
+      INSTALL_RPATH "$ORIGIN")
+    target_link_libraries(${target} PRIVATE ${CMAKE_DL_LIBS})
   else()
-    target_compile_definitions(${target} PRIVATE COMPILER_MSVC32)
+    target_compile_definitions(${target} PRIVATE
+      NOMINMAX WIN32 _WINDOWS COMPILER_MSVC ${VOLT_GMOD_PLATFORM_DEFINITIONS}
+      _USRDLL _DLL_EXT=.dll _CRT_SECURE_NO_WARNINGS _CRT_NONSTDC_NO_DEPRECATE)
+    target_compile_options(${target} PRIVATE /MP /Zi)
+    target_link_options(${target} PRIVATE /DEBUG /OPT:REF /OPT:ICF)
+    target_link_libraries(${target} PRIVATE shell32 user32 advapi32 gdi32 comdlg32 ole32)
   endif()
   if(VOLT_ENGINE_BRANCH STREQUAL "gmod")
     target_compile_definitions(${target} PRIVATE GAME_GMOD=1)
   endif()
-  target_compile_options(${target} PRIVATE /MP /Zi)
-  target_link_options(${target} PRIVATE /DEBUG /OPT:REF /OPT:ICF)
-  target_link_libraries(${target} PRIVATE VJolt::SDK shell32 user32 advapi32 gdi32 comdlg32 ole32
-    ${volt_sdk_module_libraries})
+  target_link_libraries(${target} PRIVATE VJolt::SDK ${volt_sdk_module_libraries})
   set_target_properties(${target} PROPERTIES PREFIX "")
 endfunction()
 volt_configure_module(${volt_backend})
 # Windows.h (from vjolt/cpu_policy.h) must not rename the controllers' GetObject.
-target_compile_definitions(${volt_backend} PRIVATE NOGDI)
+if(WIN32)
+  target_compile_definitions(${volt_backend} PRIVATE NOGDI)
+endif()
 if(VOLT_ENGINE_BRANCH STREQUAL "gmod" AND CMAKE_SIZEOF_VOID_P EQUAL 8)
   volt_fix_gmod_convar(${volt_backend})
 endif()
@@ -177,16 +200,21 @@ if(VOLT_JOLT_CHECKED_BUILD)
   target_compile_definitions(${volt_backend} PRIVATE VJOLT_FATAL_JOLT_ASSERTS)
 endif()
 # SSE2 is the MSVC x64 baseline. Jolt supplies its matching feature macros.
-if(VOLT_CPU_VARIANT STREQUAL "avx2")
+if(MSVC AND VOLT_CPU_VARIANT STREQUAL "avx2")
   target_compile_options(${volt_backend} PRIVATE /arch:AVX2)
+endif()
+if(MSVC)
+  set(volt_force_include /FI)
+else()
+  set(volt_force_include -include)
 endif()
 set_source_files_properties(${volt_sources}
   "${VOLT_GMOD_SDK}/public/collisionutils.cpp"
   "${VOLT_GMOD_SDK}/public/filesystem_helpers.cpp"
-  PROPERTIES COMPILE_OPTIONS "/FI${VOLT_SDK_PREFIX}")
+  PROPERTIES COMPILE_OPTIONS "${volt_force_include}${VOLT_SDK_PREFIX}")
 # memoverride must establish its own CRT include order before any SDK headers.
 set_source_files_properties("${VOLT_GMOD_SDK}/public/tier0/memoverride.cpp"
-  PROPERTIES COMPILE_OPTIONS "/FI${VOLT_ROOT}/vphysics_jolt/compat/branch_overrides.h")
+  PROPERTIES COMPILE_OPTIONS "${volt_force_include}${VOLT_ROOT}/vphysics_jolt/compat/branch_overrides.h")
 target_link_libraries(${volt_backend} PRIVATE Jolt ${volt_sdk_backend_libraries})
 
 # The external wrapper is CPU-agnostic and must never link Jolt or inherit
@@ -195,10 +223,35 @@ add_library(vphysics SHARED "${VOLT_ROOT}/vphysics_wrapper/vphysics_wrapper.cpp"
   "${VOLT_GMOD_SDK}/public/tier0/memoverride.cpp")
 volt_configure_module(vphysics)
 set_source_files_properties("${VOLT_ROOT}/vphysics_wrapper/vphysics_wrapper.cpp"
-  PROPERTIES COMPILE_OPTIONS "/FI${VOLT_SDK_PREFIX}")
+  PROPERTIES COMPILE_OPTIONS "${volt_force_include}${VOLT_SDK_PREFIX}")
+
+if(volt_linux)
+  install(TARGETS vphysics ${volt_backend} LIBRARY DESTINATION bin/linux64)
+  option(VOLT_BUILD_LINUX_LUA_MODULES "Build the Linux GMod Lua modules" ON)
+  if(VOLT_BUILD_LINUX_LUA_MODULES)
+    function(volt_add_linux_lua_module feature)
+      set(module gmsv_jolt${feature}_linux64)
+      set(sources ${ARGN})
+      list(TRANSFORM sources PREPEND "${VOLT_ROOT}/gmsv_jolt${feature}/source/")
+      add_library(${module} MODULE ${sources})
+      target_link_libraries(${module} PRIVATE VJolt::SDK GMod::Lua ${CMAKE_DL_LIBS})
+      target_link_options(${module} PRIVATE "LINKER:--no-undefined")
+      # The GMod loader expects a .dll filename even for ELF Lua modules.
+      set_target_properties(${module} PROPERTIES PREFIX "" SUFFIX ".dll"
+        CXX_VISIBILITY_PRESET hidden VISIBILITY_INLINES_HIDDEN YES)
+      install(TARGETS ${module} LIBRARY DESTINATION garrysmod/lua/bin)
+    endfunction()
+    volt_add_linux_lua_module(gravity main.cpp)
+    volt_add_linux_lua_module(constraints main.cpp path.cpp)
+    volt_add_linux_lua_module(softbody main.cpp lua_mesh.cpp lua_snapshot.cpp)
+    volt_add_linux_lua_module(stats main.cpp)
+    install(DIRECTORY "${VOLT_ROOT}/addons/jolt/" DESTINATION garrysmod/addons/jolt)
+    install(DIRECTORY "${VOLT_ROOT}/addons/jolt_performance/" DESTINATION garrysmod/addons/jolt_performance)
+  endif()
+endif()
 
 # Optional regression executables and CTest registration share the SDK setup above.
 # They live outside the public tree and are skipped when absent.
-if(EXISTS "${VOLT_ROOT}/tools/build_gmod/probes.cmake")
+if(WIN32 AND EXISTS "${VOLT_ROOT}/tools/build_gmod/probes.cmake")
   include("${VOLT_ROOT}/tools/build_gmod/probes.cmake")
 endif()
