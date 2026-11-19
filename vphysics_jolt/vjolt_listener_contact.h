@@ -95,11 +95,13 @@ inline bool VJoltDebugForceNativeContactTuning()
 	return enabled;
 }
 
+class JoltPhysicsEnvironment;
+
 class JoltPhysicsContactListener final : public JPH::ContactListener
 {
 public:
-	JoltPhysicsContactListener( JPH::PhysicsSystem &physicsSystem )
-		: m_PhysicsSystem( physicsSystem )
+	JoltPhysicsContactListener( JoltPhysicsEnvironment &environment, JPH::PhysicsSystem &physicsSystem )
+		: m_PhysicsSystem( physicsSystem ), m_Environment( environment )
 	{
 	}
 
@@ -565,6 +567,16 @@ public:
 
 	JPH::ValidateResult OnContactValidate( const JPH::Body &inBody1, const JPH::Body &inBody2, JPH::Vec3Arg inBaseOffset, const JPH::CollideShapeResult &inCollisionResult ) override
 	{
+		// Unknown ordinary pairs reach narrow phase once. Reject them before Jolt
+		// creates a contact so they cannot acquire spurious StartTouch ownership.
+		// Sensor overlaps remain independent of the game's physical response rule.
+		auto *object1 = reinterpret_cast< JoltPhysicsObject * >( inBody1.GetUserData() );
+		auto *object2 = reinterpret_cast< JoltPhysicsObject * >( inBody2.GetUserData() );
+		if ( object1 && object2 && !inBody1.IsSensor() && !inBody2.IsSensor()
+			&& !object1->IsFluid() && !object2->IsFluid()
+			&& !object1->IsTrigger() && !object2->IsTrigger()
+			&& !ShouldCollide( object1, object2 ) )
+			return JPH::ValidateResult::RejectAllContactsForThisBodyPair;
 		return JPH::ValidateResult::AcceptAllContactsForThisBodyPair;
 	}
 
@@ -585,8 +597,8 @@ public:
 			pObject1, pObject2, ioSettings );
 
 		bool bShouldCollide = ShouldCollide( pObject1, pObject2 );
-		// If the game says we shouldn't collide, we will treat this as a sensor
-		// to satisfy the StartTouch/EndTouch events.
+		// Unknown rejected pairs can be discovered once. Suppress their response;
+		// explicit triggers and fluids still need the sensor overlap lifecycle.
 		ioSettings.mIsSensor = !bShouldCollide || ioSettings.mIsSensor;
 		float normalVelocity = 0.0f;
 		const bool bPlayerContact = ( ( pObject1->GetCallbackFlags() | pObject2->GetCallbackFlags() )
@@ -633,6 +645,8 @@ public:
 		if ( !m_pGameListener )
 			return;
 
+		UpdateTouchEvents( pObject1, pObject2, inManifold, ioSettings, bShouldCollide );
+
 		if ( pObject1->IsFluid() || pObject2->IsFluid() )
 		{
 			const uint32 uThreadId = GetThreadId();
@@ -646,24 +660,6 @@ public:
 			return;
 		}
 
-		if ( pObject1->IsTrigger() || pObject2->IsTrigger() )
-		{
-			const uint32 uThreadId = GetThreadId();
-
-			if ( pObject1->IsTrigger() )
-				m_EnterTriggerEvents.EmplaceBack( uThreadId, pObject1, pObject2 );
-		
-			if ( pObject2->IsTrigger() )
-				m_EnterTriggerEvents.EmplaceBack( uThreadId, pObject2, pObject1 );
-	
-			return;
-		}
-
-		// Discovery can be speculative. Collision events belong to the actual
-		// normal response below; touch ownership is still detected here.
-
-		if ( ShouldTouchCallback( pObject1, pObject2 ) )
-			m_StartTouchEvents.EmplaceBack( GetThreadId(), JoltPhysicsCollisionInfo( pObject1, pObject2, inManifold ) );
 	}
 
 	void OnContactPersisted( const JPH::Body &inBody1, const JPH::Body &inBody2, const JPH::ContactManifold &inManifold, JPH::ContactSettings &ioSettings ) override
@@ -683,8 +679,9 @@ public:
 			pObject1, pObject2, ioSettings );
 
 		bool bShouldCollide = ShouldCollide( pObject1, pObject2 );
-		// If the game says we shouldn't collide, we will treat this as a sensor
-		// to satisfy the StartTouch/EndTouch events.
+		UpdateTouchEvents( pObject1, pObject2, inManifold, ioSettings, bShouldCollide );
+		// A changed rule suppresses response immediately. Invalidated contacts pass
+		// through validation again; early filtering also removes known rejected pairs.
 		ioSettings.mIsSensor = !bShouldCollide || ioSettings.mIsSensor;
 		// Player compatibility contacts retain IVP's inner impact-distance test. Ordinary
 		// rigid-body contacts keep Jolt's native contact lifecycle.
@@ -797,7 +794,43 @@ public:
 		m_PhysicsStats.Record( inStats );
 	}
 
-	void OnContactRemoved( const JPH::SubShapeIDPair &inSubShapePair ) override
+	enum TouchEventMask : JPH::uint8 { OrdinaryTouch = 1, Trigger1 = 2, Trigger2 = 4 };
+	enum class TriggerTransition { Enter, Leave };
+	void QueueTriggerEvent( TriggerTransition transition, JoltPhysicsObject *trigger, JoltPhysicsObject *other );
+	void RemoveTriggerContacts( JoltPhysicsObject *trigger );
+
+	void UpdateTouchEvents( JoltPhysicsObject *object1, JoltPhysicsObject *object2,
+		const JPH::ContactManifold &manifold, JPH::ContactSettings &settings, bool shouldCollide )
+	{
+		// Source-adapter lifecycle fix: end events that this contact actually started.
+		JPH::uint8 next = 0;
+		if ( m_pGameListener && !object1->IsFluid() && !object2->IsFluid() )
+		{
+			if ( object1->IsTrigger() ) next |= Trigger1;
+			if ( object2->IsTrigger() ) next |= Trigger2;
+			if ( !next && shouldCollide && ShouldTouchCallback( object1, object2 ) ) next = OrdinaryTouch;
+		}
+		const JPH::uint8 previous = settings.mContactUserData;
+		settings.mContactUserData = next;
+		if ( previous == next || !m_pGameListener )
+			return;
+		const uint32 thread = GetThreadId();
+		if ( ( previous & OrdinaryTouch ) && !( next & OrdinaryTouch ) )
+			m_EndTouchEvents.EmplaceBack( thread, JoltPhysicsCollisionInfo( object1, object2 ) );
+		if ( !( previous & OrdinaryTouch ) && ( next & OrdinaryTouch ) )
+			m_StartTouchEvents.EmplaceBack( thread, JoltPhysicsCollisionInfo( object1, object2, manifold ) );
+		if ( !( previous & Trigger1 ) && ( next & Trigger1 ) )
+			QueueTriggerEvent( TriggerTransition::Enter, object1, object2 );
+		if ( !( previous & Trigger2 ) && ( next & Trigger2 ) )
+			QueueTriggerEvent( TriggerTransition::Enter, object2, object1 );
+		// Explicit RemoveTrigger consumes these ownership bits before dispatching leaves.
+		if ( ( previous & Trigger1 ) && !( next & Trigger1 ) )
+			QueueTriggerEvent( TriggerTransition::Leave, object1, object2 );
+		if ( ( previous & Trigger2 ) && !( next & Trigger2 ) )
+			QueueTriggerEvent( TriggerTransition::Leave, object2, object1 );
+	}
+
+	void OnContactRemovedWithUserData( const JPH::SubShapeIDPair &inSubShapePair, JPH::uint8 eventMask ) override
 	{
 		m_FrictionContactCache.RemoveContact( inSubShapePair );
 
@@ -833,20 +866,18 @@ public:
 			return;
 		}
 
-		if ( pObject1->IsTrigger() || pObject2->IsTrigger() )
+		if ( eventMask & ( Trigger1 | Trigger2 ) )
 		{
-			const uint32 uThreadId = GetThreadId();
-
-			if ( pObject1->IsTrigger() )
-				m_LeaveTriggerEvents.EmplaceBack( uThreadId, pObject1, pObject2 );
+			if ( eventMask & Trigger1 )
+				QueueTriggerEvent( TriggerTransition::Leave, pObject1, pObject2 );
 		
-			if ( pObject2->IsTrigger() )
-				m_LeaveTriggerEvents.EmplaceBack( uThreadId, pObject2, pObject1 );
+			if ( eventMask & Trigger2 )
+				QueueTriggerEvent( TriggerTransition::Leave, pObject2, pObject1 );
 	
 			return;
 		}
 
-		if ( !ShouldTouchCallback( pObject1, pObject2 ) )
+		if ( !( eventMask & OrdinaryTouch ) )
 			return;
 
 		const uint32 uThreadId = GetThreadId();
@@ -864,6 +895,30 @@ public:
 	static inline std::uint32_t MakeShouldCollideObjectKey( const JoltPhysicsObject *pObject )
 	{
 		return pObject->GetBodyID().GetIndexAndSequenceNumber();
+	}
+
+	JPH::PhysicsSystem::ESimBodyPairFilterResult ShouldProcessBodyPair( const JPH::Body &body1, const JPH::Body &body2 ) const
+	{
+		using Result = JPH::PhysicsSystem::ESimBodyPairFilterResult;
+		// Triggers and fluids retain their overlap lifecycle even when the game
+		// rejects physical response. Never run the game/Lua solver from this filter.
+		if ( body1.IsSensor() || body2.IsSensor() )
+			return Result::Accept;
+		auto *object1 = reinterpret_cast< JoltPhysicsObject * >( body1.GetUserData() );
+		auto *object2 = reinterpret_cast< JoltPhysicsObject * >( body2.GetUserData() );
+		if ( !object1 || !object2 || object1->GetEnvironment() != object2->GetEnvironment()
+			|| object1->IsFluid() || object2->IsFluid()
+			|| object1->IsTrigger() || object2->IsTrigger() )
+			return Result::Accept;
+		if ( !m_pGameSolver.load( std::memory_order_acquire ) )
+			return Result::Accept;
+		if ( !PreEmptGameShouldCollide( object1, object2 ) )
+			return Result::Reject;
+		const auto lookup = m_ShouldCollideCache.Find(
+			MakeShouldCollideObjectKey( object1 ), MakeShouldCollideObjectKey( object2 ) );
+		// Jolt caches geometric misses but not listener-rejected pairs. Unknown
+		// game rules can retain the former without hiding their next validation.
+		return !lookup.found || lookup.shouldCollide ? Result::Accept : Result::Reject;
 	}
 
 	void InvalidateShouldCollideCache( JoltPhysicsObject *pObject )
@@ -895,38 +950,22 @@ public:
 		if ( !PreEmptGameShouldCollide( pObject0, pObject1 ) )
 			return false;
 
-		// Cache hits only take a shared cache lock. GMod's solver can call Lua, so misses still enter
-		// one serialized callback section.
+		// Stable published cache hits need no mutex. GMod's solver can call Lua, so misses
+		// still enter one serialized callback section.
 		const std::uint32_t bodyKey0 = MakeShouldCollideObjectKey( pObject0 );
 		const std::uint32_t bodyKey1 = MakeShouldCollideObjectKey( pObject1 );
 		VJoltShouldCollideCache::Lookup lookup = m_ShouldCollideCache.Find( bodyKey0, bodyKey1 );
 		if ( lookup.found )
 			return lookup.shouldCollide;
 
-		// Actually ask the game now, locking both bodies so they cannot have
-		// concurrent ShouldCollide calls.
-		//JoltPhysicsObjectPairLock lock( pObject0->GetCollisionTestLock(), pObject1->GetCollisionTestLock() );
-		std::unique_lock lock( m_ShouldCollideLock );
-
-		// Another worker may have populated the pair while this worker waited for the Lua-safe lock.
-		lookup = m_ShouldCollideCache.Find( bodyKey0, bodyKey1 );
-		if ( lookup.found )
-			return lookup.shouldCollide;
-
-		pGameSolver = m_pGameSolver.load( std::memory_order_acquire );
-		if ( !pGameSolver )
-			return true;
-
-		const bool bCollide = pGameSolver->ShouldCollide(
-			pObject0, pObject1, pObject0->GetGameData(), pObject1->GetGameData() );
-
-		// If RecheckCollisionFilter ran during the game callback, the epoch changed and this result
-		// must not be inserted after the invalidation. It is still the answer for this invocation.
-		m_ShouldCollideCache.StoreIfUnchanged( lookup, bCollide );
-		return bCollide;
+		return QueryGameShouldCollide( pObject0, pObject1 );
 	}
 
-	bool PreEmptGameShouldCollide( JoltPhysicsObject *pObject0, JoltPhysicsObject *pObject1 )
+	bool QueryGameShouldCollide( JoltPhysicsObject *object0, JoltPhysicsObject *object1 );
+	bool WantsContactValidationBatches() const override { return m_bPrepareGameFilterQueries.load( std::memory_order_acquire ); }
+	void OnContactValidationBatch( const std::function<void()> &batch ) override;
+
+	bool PreEmptGameShouldCollide( JoltPhysicsObject *pObject0, JoltPhysicsObject *pObject1 ) const
 	{
 		// This function pre-empts the result of the
 		// game's ShouldCollide implementation to avoid needless locking.
@@ -1004,7 +1043,11 @@ public:
 	void FlushCallbacks()
 	{
 		if ( !m_pGameListener )
+		{
+			m_TriggerEvents.clear();
+			m_bTriggerEventsPending = false;
 			return;
+		}
 
 		// Send StartTouch events
 		m_StartTouchEvents.ForEach< true >( [ this ]( JoltPhysicsCollisionData& event )
@@ -1012,11 +1055,18 @@ public:
 			m_pGameListener->StartTouch( event.GetPair().pObject1, event.GetPair().pObject2, &event );
 		});
 
-		// Send EnterTrigger events
-		m_EnterTriggerEvents.ForEach< true >( [ this ]( JoltPhysicsContactPair& event )
+		// Workers have joined. A game callback can append another transition; copy
+		// before dispatch so vector growth cannot invalidate the current event.
+		for ( size_t index = 0; m_pGameListener && index < m_TriggerEvents.size(); ++index )
 		{
-			m_pGameListener->ObjectEnterTrigger( event.pObject1, event.pObject2 );
-		});
+			const auto event = m_TriggerEvents[index];
+			if ( event.transition == TriggerTransition::Enter )
+				m_pGameListener->ObjectEnterTrigger( event.trigger, event.other );
+			else
+				m_pGameListener->ObjectLeaveTrigger( event.trigger, event.other );
+		}
+		m_TriggerEvents.clear();
+		m_bTriggerEventsPending = false;
 
 		// Send FluidStartTouch events
 		m_FluidStartTouchEvents.ForEach< true >( [ this ]( JoltPhysicsContactPair& event )
@@ -1044,12 +1094,6 @@ public:
 			m_pGameListener->EndTouch( event.GetPair().pObject1, event.GetPair().pObject2, &event );
 		});
 
-		// Send LeaveTrigger events
-		m_LeaveTriggerEvents.ForEach< true >( [ this ]( JoltPhysicsContactPair& event )
-		{
-			m_pGameListener->ObjectLeaveTrigger( event.pObject1, event.pObject2 );
-		});
-
 		// Send FluidEndTouch events
 		m_FluidEndTouchEvents.ForEach< true >( [ this ]( JoltPhysicsContactPair& event )
 		{
@@ -1068,6 +1112,15 @@ public:
 
 	void BeginFrictionContactFrame( float frameDeltaTime )
 	{
+		m_bTriggerEventsPending = true;
+		m_ShouldCollideCache.TakeInvalidatedPairs( m_InvalidatedFilterPairs );
+		// Batch game queries on the owner to amortize worker pause/resume. Related
+		// precedent: Bullet 3.25 batches islands by bodies/manifolds/constraints cost:
+		// https://github.com/bulletphysics/bullet3/blob/3.25/src/BulletDynamics/Dynamics/btSimulationIslandManagerMt.cpp#L29
+		// 64 here counts invalidated former pairs, not Bullet's weighted cost.
+		// This local cutoff trades dispatch cost against extra AABB-overlap queries.
+		m_bPrepareGameFilterQueries.store( GetGameSolver() && m_InvalidatedFilterPairs.size() >= 64, std::memory_order_release );
+		m_ShouldCollideCache.PublishReadSnapshot();
 		m_nPSIIndex.fetch_add( 1, std::memory_order_relaxed );
 		m_CollisionEventTime += frameDeltaTime;
 		for ( auto it = m_LastImpactTimes.begin(); it != m_LastImpactTimes.end(); )
@@ -1154,6 +1207,7 @@ private:
 	}
 
 	const JPH::PhysicsSystem &m_PhysicsSystem;
+	JoltPhysicsEnvironment &m_Environment;
 
 	IPhysicsCollisionEvent	*m_pGameListener = nullptr;
 	bool m_BatchContactResponses = false;
@@ -1426,8 +1480,16 @@ private:
 	JoltPhysicsEventTracker< JoltPhysicsCollisionData >		m_StartTouchEvents;
 	JoltPhysicsEventTracker< JoltPhysicsCollisionData >		m_EndTouchEvents;
 
-	JoltPhysicsEventTracker< JoltPhysicsContactPair >		m_EnterTriggerEvents;
-	JoltPhysicsEventTracker< JoltPhysicsContactPair >		m_LeaveTriggerEvents;
+	struct TriggerEvent
+	{
+		TriggerTransition transition;
+		JoltPhysicsObject *trigger, *other;
+	};
+	std::vector<TriggerEvent> m_TriggerEvents;
+	std::mutex m_TriggerEventMutex;
+	bool m_bTriggerEventsPending = false;
+	std::atomic<bool> m_bPrepareGameFilterQueries{ false };
+	std::vector<VJoltShouldCollideCache::Pair> m_InvalidatedFilterPairs;
 
 	// For the fluid events:
 	//   Object1 = the fluid

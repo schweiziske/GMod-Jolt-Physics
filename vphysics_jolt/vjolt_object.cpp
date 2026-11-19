@@ -489,12 +489,14 @@ void JoltPhysicsObject::RecheckCollisionFilter()
 
 void JoltPhysicsObject::RecheckContactPoints( bool bSearchForNewContacts /*= false*/ )
 {
-	if ( m_pEnvironment->IsInContactCallback() && m_pEnvironment->DeferObjectMutation( this, [this, bSearchForNewContacts]() { RecheckContactPoints( bSearchForNewContacts ); } ) ) return;
-	GetJoltEnvironment()->GetContactListener()->InvalidateFrictionContacts( GetBodyID() );
-	JPH::BodyInterface& bodyInterface = m_pPhysicsSystem->GetBodyInterfaceNoLock();
-	bodyInterface.InvalidateContactCache( GetBodyID() );
-
 	GetJoltEnvironment()->GetContactListener()->InvalidateShouldCollideCache( this );
+	auto invalidateContacts = [this]()
+	{
+		GetJoltEnvironment()->GetContactListener()->InvalidateFrictionContacts( GetBodyID() );
+		m_pPhysicsSystem->GetBodyInterfaceNoLock().InvalidateContactCache( GetBodyID() );
+	};
+	if ( m_pEnvironment->IsInContactCallback() && m_pEnvironment->DeferObjectMutation( this, invalidateContacts ) ) return;
+	invalidateContacts();
 }
 
 //-------------------------------------------------------------------------------------------------
@@ -1581,8 +1583,10 @@ void JoltPhysicsObject::BecomeTrigger()
 	EnableDrag( false );
 	EnableGravity( false );
 
-	GetJoltEnvironment()->GetContactListener()->InvalidateFrictionContacts( GetBodyID() );
 	m_pBody->SetIsSensor( true );
+	// A just-rejected ordinary pair can still have an empty body-pair cache entry.
+	// Changing to a trigger must discover overlaps immediately instead of reusing it.
+	RecheckContactPoints();
 }
 
 void JoltPhysicsObject::RemoveTrigger()
@@ -1593,59 +1597,18 @@ void JoltPhysicsObject::RemoveTrigger()
 
 	// Note: Does not change drag/gravity state back, to mimick Source 1 behaviour.
 
-	// Josh:
-	// All this logic below is to trigger ObjectLeaveTrigger
-	// when the trigger is deleted.
-	IPhysicsCollisionEvent *pEventListener = m_pEnvironment->GetContactListener()->GetGameListener();
-	if ( pEventListener && IsTrigger() )
-	{
-		class SourceTriggerCollector : public JPH::CollideShapeCollector
-		{
-		public:
-			SourceTriggerCollector( JPH::PhysicsSystem *pPhysicsSystem, IPhysicsCollisionEvent *pGameListener, JoltPhysicsObject *pTrigger )
-				: m_pPhysicsSystem( pPhysicsSystem )
-				, m_pGameListener ( pGameListener )
-				, m_pTrigger      ( pTrigger ) {}
+	// End only trigger entries actually recorded by this contact frame. The old
+	// shape query missed static/speculative pairs and could report unstarted pairs.
+	auto *environment = m_pEnvironment;
+	auto *system = m_pPhysicsSystem;
+	const JPH::BodyID bodyID = GetBodyID();
+	environment->GetContactListener()->RemoveTriggerContacts( this );
+	// A synchronous Leave callback may have deleted this trigger.
+	const JPH::Body *body = system->GetBodyLockInterfaceNoLock().TryGetBody( bodyID );
+	if ( !body || body->GetUserData() != reinterpret_cast<JPH::uint64>( this ) ) return;
 
-			void AddHit( const ResultType &inResult ) override
-			{
-				const JPH::BodyID inBodyID = inResult.mBodyID2;
-
-				JPH::BodyLockWrite lock( m_pPhysicsSystem->GetBodyLockInterface(), inBodyID );
-				JPH::Body &body = lock.GetBody();
-				JoltPhysicsObject *pObject = reinterpret_cast<JoltPhysicsObject *>( body.GetUserData() );
-
-				if ( !pObject )
-					return;
-
-				m_pGameListener->ObjectLeaveTrigger( m_pTrigger, pObject );
-			}
-
-		private:
-			JPH::PhysicsSystem     *m_pPhysicsSystem;
-			IPhysicsCollisionEvent *m_pGameListener;
-			JoltPhysicsObject      *m_pTrigger;
-		};
-
-		SourceTriggerCollector collector( m_pPhysicsSystem, pEventListener, this );
-
-		JPH::IgnoreSingleBodyFilter body_filter( GetBodyID() );
-
-		JPH::CollideShapeSettings collideSettings;
-		collideSettings.mActiveEdgeMode = JPH::EActiveEdgeMode::CollideWithAll;
-
-		JPH::BodyInterface &bodyInterface = m_pPhysicsSystem->GetBodyInterfaceNoLock();
-		JPH::Mat44 queryTransform = bodyInterface.GetCenterOfMassTransform( GetBodyID() );
-
-		const JPH::Shape *pShape = GetCollide()->ToShape();
-
-		m_pPhysicsSystem->GetNarrowPhaseQueryNoLock().CollideShape(
-			pShape, JPH::Vec3::sReplicate( 1.0f ), queryTransform, collideSettings, JPH::Vec3::sZero(), collector,
-			JPH::SpecifiedBroadPhaseLayerFilter( BroadPhaseLayers::MOVING ), JPH::SpecifiedObjectLayerFilter( Layers::MOVING ), body_filter );
-	}
-
-	GetJoltEnvironment()->GetContactListener()->InvalidateFrictionContacts( GetBodyID() );
 	m_pBody->SetIsSensor( false );
+	RecheckContactPoints();
 }
 
 //-------------------------------------------------------------------------------------------------

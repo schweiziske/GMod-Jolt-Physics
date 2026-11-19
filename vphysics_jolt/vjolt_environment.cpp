@@ -371,7 +371,7 @@ private:
 
 JoltPhysicsEnvironment::JoltPhysicsEnvironment()
 	: m_ActivationListener( m_PhysicsSystem )
-	, m_ContactListener( m_PhysicsSystem )
+	, m_ContactListener( *this, m_PhysicsSystem )
 {
 	m_PerformanceParams.Defaults();
 
@@ -395,6 +395,10 @@ JoltPhysicsEnvironment::JoltPhysicsEnvironment()
 	// Note that this is called from a job so whatever you do here needs to be thread safe.
 	// Registering one is entirely optional.
 	m_PhysicsSystem.SetContactListener( &m_ContactListener );
+	m_PhysicsSystem.SetSimBodyPairFilter( [this]( const JPH::Body &body1, const JPH::Body &body2 )
+	{
+		return m_ContactListener.ShouldProcessBodyPair( body1, body2 );
+	} );
 
 	// Match IVP's CIVPMaterialManager::get_friction_factor: product clamped to [0, 1].
 	// Jolt's geometric mean gives systematically higher friction than IVP for the same
@@ -1303,7 +1307,10 @@ void JoltPhysicsEnvironment::Simulate( float deltaTime )
 		: !std::strcmp( syncOverride, "legacy" ) ? 2 : 0 ) : vjolt_collision_callbacks.GetInt();
 	const bool synchronousContacts = syncMode != 0 && m_ContactListener.GetGameListener() != nullptr;
 	std::optional<VJoltOwnerCallbackJobs> callbackJobs;
-	if ( synchronousContacts ) callbackJobs.emplace( *static_cast<JPH::JobSystemWithBarrier *>( jobSystem ) );
+	// ShouldCollide may call Lua even in a filter-only environment or with impact
+	// callbacks disabled. Its owner dispatch is independent of the response mode.
+	if ( synchronousContacts || m_ContactListener.GetGameSolver() )
+		callbackJobs.emplace( *static_cast<JPH::JobSystemWithBarrier *>( jobSystem ) );
 
 	// Clear any dead objects before running the simulation.
 	DeleteDeadObjects();
@@ -1415,12 +1422,15 @@ void JoltPhysicsEnvironment::Simulate( float deltaTime )
 		// worker jobs have completed.
 		m_ContactListener.BeginFrictionContactFrame( flUpdateTime );
 		m_pContactCallbackJobs = callbackJobs ? &*callbackJobs : nullptr;
+		m_bSynchronousContactCallbacks = synchronousContacts;
 		m_ContactListener.SetContactResponseBatches( synchronousContacts && syncMode == 1
 			&& m_ContactListener.GetGameListener() != nullptr );
 		const JPH::EPhysicsUpdateError updateErrors =
 			m_PhysicsSystem.Update( flUpdateTime, nSubSteps, tempAllocator,
 				m_pContactCallbackJobs ? m_pContactCallbackJobs : jobSystem );
+		JPH_ASSERT( m_CallbackChangedBodies.empty(), "Callback body properties must be refreshed before leaving the owner gate" );
 		m_pContactCallbackJobs = nullptr;
+		m_bSynchronousContactCallbacks = false;
 		m_ContactListener.SetContactResponseBatches( false );
 		VJoltSoftBodyAfterSimulation( this, flUpdateTime );
 		// Solver rows and island arrays are no longer live. Apply geometry/mass/
@@ -1618,7 +1628,12 @@ bool JoltPhysicsEnvironment::RunContactBatch( const std::function<bool()> &batch
 			}
 		} access;
 #endif
-		return batch();
+		const bool result = batch();
+		// Filter-only and batched ShouldCollide callbacks can change mass/inertia
+		// without ever reaching Pre/PostCollision. Refresh while jobs are parked
+		// and every wrapper is still alive, before deferred deletion can run.
+		RefreshCallbackBodyProperties();
+		return result;
 	} );
 }
 

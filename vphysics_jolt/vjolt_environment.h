@@ -276,7 +276,8 @@ public:
 		const std::function<bool()> &callback );
 	bool IsInContactCallback() const;
 	bool RunContactBatch( const std::function<bool()> &batch );
-	bool HasSynchronousContactCallbacks() const { return m_pContactCallbackJobs != nullptr; }
+	bool HasOwnerCallbackJobs() const { return m_pContactCallbackJobs != nullptr; }
+	bool HasSynchronousContactCallbacks() const { return HasOwnerCallbackJobs() && m_bSynchronousContactCallbacks; }
 	bool IsProfilingContactCallbacks() const { return m_pContactCallbackJobs && m_pContactCallbackJobs->IsProfiling(); }
 	void RecordContactCallbackTimings( double gameMs, double responseMs ) { m_pContactCallbackJobs->RecordEventTimings( gameMs, responseMs ); }
 	JPH::RVec3 GetObjectResponseCenterOfMass( const JoltPhysicsObject *pObject ) const;
@@ -315,6 +316,7 @@ private:
 
 	bool m_bSimulating = false;
 	VJoltOwnerCallbackJobs *m_pContactCallbackJobs = nullptr;
+	bool m_bSynchronousContactCallbacks = false;
 	JoltPhysicsObject *m_pCollisionEndpoint1 = nullptr;
 	JoltPhysicsObject *m_pCollisionEndpoint2 = nullptr;
 	JPH::RVec3 m_vCollisionCenterOfMass1 = JPH::RVec3::sZero();
