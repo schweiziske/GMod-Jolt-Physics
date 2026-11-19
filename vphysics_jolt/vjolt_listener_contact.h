@@ -1142,12 +1142,21 @@ public:
 
 	void PublishFrictionContactFrame()
 	{
-		m_FrictionContactCache.PublishFrame( [ this ]( const JPH::BodyID &body1ID, const JPH::BodyID &body2ID )
+		// Update has joined its jobs. Take the body read locks once for this batch,
+		// in body-before-cache order, instead of reacquiring them for every sleeping
+		// pair. Readers still see a consistent activation/lifetime snapshot.
+		struct BodyReadBatch
 		{
-			JPH::BodyID bodyIDs[ 2 ] = { body1ID, body2ID };
-			JPH::BodyLockMultiRead lock( m_PhysicsSystem.GetBodyLockInterface(), bodyIDs, 2 );
-			const JPH::Body *pBody1 = lock.GetBody( 0 );
-			const JPH::Body *pBody2 = lock.GetBody( 1 );
+			const JPH::BodyLockInterface &locks;
+			JPH::BodyLockInterface::MutexMask mask;
+			explicit BodyReadBatch( const JPH::BodyLockInterface &inLocks )
+				: locks( inLocks ), mask( locks.GetAllBodiesMutexMask() ) { locks.LockRead( mask ); }
+			~BodyReadBatch() { locks.UnlockRead( mask ); }
+		} readBodies( m_PhysicsSystem.GetBodyLockInterface() );
+		m_FrictionContactCache.PublishFrame( [ &readBodies ]( const JPH::BodyID &body1ID, const JPH::BodyID &body2ID )
+		{
+			const JPH::Body *pBody1 = readBodies.locks.TryGetBody( body1ID );
+			const JPH::Body *pBody2 = readBodies.locks.TryGetBody( body2ID );
 			if ( !pBody1 || !pBody2 || !pBody1->IsInBroadPhase() || !pBody2->IsInBroadPhase()
 				|| pBody1->IsSensor() || pBody2->IsSensor() )
 			{

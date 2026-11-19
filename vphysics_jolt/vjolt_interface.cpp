@@ -179,6 +179,9 @@ InitReturnVal_t JoltPhysicsInterface::Init()
 	pool->SetThreadInitFunction([](int) { VJoltCPU::BindWorker(); });
 	pool->Init( JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, int( threadCount ) );
 	m_pJobSystem = pool;
+	if ( threadCount > 0 )
+		m_pSingleThreadedJobSystem = new JPH::JobSystemThreadPool(
+			JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, 0 );
 
 	return INIT_OK;
 }
@@ -186,6 +189,8 @@ InitReturnVal_t JoltPhysicsInterface::Init()
 void JoltPhysicsInterface::Shutdown()
 {
 	VJoltCPU::SourceOwner().Reset();
+	delete m_pSingleThreadedJobSystem;
+	m_pSingleThreadedJobSystem = nullptr;
 	delete m_pJobSystem;
 	m_pJobSystem = nullptr;
 	ReportTempAllocatorPressure( true );

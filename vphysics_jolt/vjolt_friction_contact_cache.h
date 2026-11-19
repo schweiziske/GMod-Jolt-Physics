@@ -148,6 +148,7 @@ public:
 
 		BuildingShard &shard = GetShard( key );
 		std::lock_guard< std::mutex > lock( shard.mutex );
+		shard.changed = true;
 		auto it = shard.contacts.find( key );
 		if ( it == shard.contacts.end() )
 		{
@@ -189,6 +190,7 @@ public:
 		if ( it == shard.contacts.end() )
 			return;
 
+		shard.changed = true;
 		it->second.normalImpulse += normalImpulse;
 		it->second.frictionEnergy += frictionEnergy;
 	}
@@ -202,6 +204,7 @@ public:
 		if ( it == shard.contacts.end() )
 			return;
 
+		shard.changed = true;
 		// IVP creates a friction synapse with now_friction_pressure == 0 during an impact PSI.
 		// Jolt may run several collision steps inside one PhysicsSystem::Update; after the first
 		// step the same contact is already persistent. Suppress all pressure from that contact
@@ -227,12 +230,41 @@ public:
 		std::lock_guard< std::mutex > lock( shard.mutex );
 		auto it = shard.contacts.find( key );
 		if ( it != shard.contacts.end() )
+		{
+			shard.changed = true;
 			it->second.lastRemovedFrame = m_BuildingFrameGeneration;
+		}
 	}
 
 	template < typename RetainUnseenContact >
 	void PublishFrame( RetainUnseenContact retainUnseenContact )
 	{
+		// A sleeping scene receives no manifold updates. Its published vectors and
+		// pressures are already correct; validate each retained pair's current body
+		// state before reusing them. This still detects wakes, removals and sensors
+		// even when no contact callback accompanied the change.
+		bool changed = m_LastPublishedGeneration == m_BuildingFrameGeneration;
+		for ( const BuildingShard &shard : m_BuildingShards )
+		{
+			std::lock_guard< std::mutex > lock( shard.mutex );
+			if ( shard.changed ) { changed = true; break; }
+		}
+		if ( !changed )
+		{
+			bool retainAll = true;
+			for ( const auto &entry : m_PublishPairStates )
+				if ( !retainUnseenContact( entry.second.body1ID, entry.second.body2ID ) )
+				{
+					retainAll = false;
+					break;
+				}
+			if ( retainAll )
+			{
+				m_LastPublishedGeneration = m_BuildingFrameGeneration;
+				return;
+			}
+		}
+
 		// The environment serializes publication. Source queries keep using the published
 		// buffer while we reuse the other table and its contact-vector capacities.
 		PublishedMap &next = m_PublishedContactBuffers[ 1 - m_PublishedBufferIndex ];
@@ -315,6 +347,7 @@ public:
 						contact.normalImpulse, contact.frictionEnergy, contact.frameDeltaTime } );
 				++it;
 			}
+			shard.changed = false;
 		}
 		m_ContactsProcessed.fetch_add( processedContacts, std::memory_order_relaxed );
 		for ( auto it = next.begin(); it != next.end(); )
@@ -333,6 +366,7 @@ public:
 		std::unique_lock< std::shared_mutex > lock( m_PublishedMutex );
 		// Flipping the index avoids unordered_dense::swap's temporary bucket allocations.
 		m_PublishedBufferIndex = 1 - m_PublishedBufferIndex;
+		m_LastPublishedGeneration = m_BuildingFrameGeneration;
 	}
 
 	void CopyPublishedContacts( const JPH::BodyID &bodyID, std::vector< Contact > &out ) const
@@ -453,6 +487,7 @@ private:
 	struct BuildingShard
 	{
 		mutable std::mutex mutex;
+		bool changed = false;
 		BuildingContactMap contacts;
 		ankerl::unordered_dense::map< std::uint32_t, BodyContacts > bodies;
 	};
@@ -490,6 +525,7 @@ private:
 
 	BuildingContactMap::iterator EraseBuildingContact( BuildingShard &shard, BuildingContactMap::iterator it )
 	{
+		shard.changed = true;
 		const auto index = static_cast< std::uint32_t >( it - shard.contacts.begin() );
 		const auto last = static_cast< std::uint32_t >( shard.contacts.size() - 1 );
 		const BuildingContact &contact = it->second;
@@ -630,6 +666,7 @@ private:
 	std::atomic< std::uint64_t > m_ContactsProcessed = 0;
 	float m_BuildingFrameDeltaTime = 0.0f;
 	std::uint64_t m_BuildingFrameGeneration = 1;
+	std::uint64_t m_LastPublishedGeneration = 0;
 	PublishPairStateMap m_PublishPairStates;
 	mutable std::shared_mutex m_PublishedMutex;
 	std::array< PublishedMap, 2 > m_PublishedContactBuffers;

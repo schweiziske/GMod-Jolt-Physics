@@ -105,6 +105,7 @@ public:
 	static JoltPhysicsInterface &GetInstance() { return s_PhysicsInterface; }
 	JPH::TempAllocator *GetTempAllocator() { return m_pTempAllocator; }
 	JPH::JobSystem *GetJobSystem() { return m_pJobSystem; }
+	JPH::JobSystem *GetSingleThreadedJobSystem() { return m_pSingleThreadedJobSystem ? m_pSingleThreadedJobSystem : m_pJobSystem; }
 	void ReportTempAllocatorPressure( bool bFinal = false );
 
 	void SetDebugOverlay( IVJoltDebugOverlay *pOverlay ) { if ( m_pDebugOverlay != pOverlay ) m_pDebugOverlay = pOverlay; }
@@ -127,6 +128,9 @@ private:
 	// you would implement the JobSystem interface yourself and let Jolt Physics run on top
 	// of your own job scheduler. JobSystemThreadPool is an example implementation.
 	JPH::JobSystem *m_pJobSystem = nullptr;
+	// A persistent zero-worker pool keeps the same barrier/callback protocol for
+	// tiny updates without dispatching work to the main pool's sleeping threads.
+	JPH::JobSystem *m_pSingleThreadedJobSystem = nullptr;
 
 	// For debugging stuff in collide and such.
 	IVJoltDebugOverlay *m_pDebugOverlay = nullptr;

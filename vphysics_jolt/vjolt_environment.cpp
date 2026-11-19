@@ -1305,12 +1305,6 @@ void JoltPhysicsEnvironment::Simulate( float deltaTime )
 	const char *syncOverride = std::getenv( "VJOLT_SYNC_COLLISIONS" );
 	const int syncMode = syncOverride ? ( !std::strcmp( syncOverride, "batch" ) ? 1
 		: !std::strcmp( syncOverride, "legacy" ) ? 2 : 0 ) : vjolt_collision_callbacks.GetInt();
-	const bool synchronousContacts = syncMode != 0 && m_ContactListener.GetGameListener() != nullptr;
-	std::optional<VJoltOwnerCallbackJobs> callbackJobs;
-	// ShouldCollide may call Lua even in a filter-only environment or with impact
-	// callbacks disabled. Its owner dispatch is independent of the response mode.
-	if ( synchronousContacts || m_ContactListener.GetGameSolver() )
-		callbackJobs.emplace( *static_cast<JPH::JobSystemWithBarrier *>( jobSystem ) );
 
 	// Clear any dead objects before running the simulation.
 	DeleteDeadObjects();
@@ -1421,13 +1415,31 @@ void JoltPhysicsEnvironment::Simulate( float deltaTime )
 		// Contact callbacks fill a separate frame during Update; only publish it after all Jolt
 		// worker jobs have completed.
 		m_ContactListener.BeginFrictionContactFrame( flUpdateTime );
+		// Player collision hulls can remain active while the rest of the scene sleeps.
+		// Small-work serial execution has a precedent in Bullet 3.25's parallelFor:
+		// https://github.com/bulletphysics/bullet3/blob/3.25/src/LinearMath/TaskScheduler/btTaskScheduler.cpp#L656
+		// PhysX 5.4.1 also documents extra-thread overhead in very simple scenes:
+		// https://nvidia-omniverse.github.io/PhysX/physx/5.4.1/docs/BestPractices.html#performance-implications-for-multi-threading
+		// These support the scheduling principle, not this implementation or the value 4.
+		// Our whole-Update cutoff is a project heuristic, not a measured crossover.
+		// The first-step cost of a large collision-triggered wake is still unmeasured.
+		// Select after controllers, attachments and gravity have had a chance to wake
+		// bodies. Collision-triggered wakes still run the complete solver in this PSI;
+		// the next PSI re-evaluates the workload and can use the parallel pool again.
+		JPH::JobSystem *updateJobs = jobSystem;
+		if ( m_PhysicsSystem.GetNumActiveBodies( JPH::EBodyType::RigidBody ) <= 4
+			&& m_PhysicsSystem.GetNumActiveBodies( JPH::EBodyType::SoftBody ) == 0 )
+			updateJobs = JoltPhysicsInterface::GetInstance().GetSingleThreadedJobSystem();
+		std::optional<VJoltOwnerCallbackJobs> callbackJobs;
+		const bool synchronousContacts = syncMode != 0 && m_ContactListener.GetGameListener() != nullptr;
+		if ( synchronousContacts || m_ContactListener.GetGameSolver() )
+			callbackJobs.emplace( *static_cast<JPH::JobSystemWithBarrier *>( updateJobs ) );
 		m_pContactCallbackJobs = callbackJobs ? &*callbackJobs : nullptr;
 		m_bSynchronousContactCallbacks = synchronousContacts;
-		m_ContactListener.SetContactResponseBatches( synchronousContacts && syncMode == 1
-			&& m_ContactListener.GetGameListener() != nullptr );
+		m_ContactListener.SetContactResponseBatches( synchronousContacts && syncMode == 1 );
 		const JPH::EPhysicsUpdateError updateErrors =
 			m_PhysicsSystem.Update( flUpdateTime, nSubSteps, tempAllocator,
-				m_pContactCallbackJobs ? m_pContactCallbackJobs : jobSystem );
+				m_pContactCallbackJobs ? m_pContactCallbackJobs : updateJobs );
 		JPH_ASSERT( m_CallbackChangedBodies.empty(), "Callback body properties must be refreshed before leaving the owner gate" );
 		m_pContactCallbackJobs = nullptr;
 		m_bSynchronousContactCallbacks = false;
