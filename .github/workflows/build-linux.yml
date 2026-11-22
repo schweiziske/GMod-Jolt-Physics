@@ -28,14 +28,12 @@ jobs:
       matrix:
         include:
           - target: gmod-public-linux-x86
-            steam_branch: public
             bin: bin
             wrapper: vphysics_srv.so
             lua_suffix: linux
             elf_class: ELF32
             package: GMod-Jolt-Physics-Public-Linux-x86
           - target: gmod-beta-linux-x86-64
-            steam_branch: x86-64
             bin: bin/linux64
             wrapper: vphysics.so
             lua_suffix: linux64
@@ -52,29 +50,21 @@ jobs:
         with:
           repository: schweiziske/gmod-project-sdk
           ssh-key: ${{ secrets.SDK_DEPLOY_KEY }}
-          ref: e3910f8106c77f356114e12c9ca7d6592489e1ef
+          ref: 545fea7075bfd55000e2ae16223ba394422cfd94
           path: .cache/deps/sdk
           persist-credentials: false
       - name: Install build dependencies
         shell: bash
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends g++-12-multilib ninja-build lib32gcc-s1
-      - name: Download matching dedicated server
-        shell: bash
         env:
-          STEAM_BRANCH: ${{ matrix.steam_branch }}
+          ELF_CLASS: ${{ matrix.elf_class }}
         run: |
-          steamcmd="$RUNNER_TEMP/steamcmd"
-          mkdir -p "$steamcmd"
-          curl -fsSL --retry 3 https://media.steampowered.com/installer/steamcmd_linux.tar.gz -o "$steamcmd/steamcmd.tar.gz"
-          tar -xzf "$steamcmd/steamcmd.tar.gz" -C "$steamcmd"
-          branch_args=()
-          if [[ "$STEAM_BRANCH" != public ]]; then
-            branch_args=(-beta "$STEAM_BRANCH")
+          packages=(g++-12 ninja-build)
+          if [[ "$ELF_CLASS" == ELF32 ]]; then
+            sudo dpkg --add-architecture i386
+            packages+=(g++-12-multilib linux-libc-dev:i386)
           fi
-          "$steamcmd/steamcmd.sh" +@ShutdownOnFailedCommand 1 +force_install_dir "$RUNNER_TEMP/gmod" \
-            +login anonymous +app_update 4020 "${branch_args[@]}" +quit
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends "${packages[@]}"
       - name: Build and package Linux binaries
         shell: bash
         env:
@@ -86,7 +76,6 @@ jobs:
           PACKAGE: ${{ matrix.package }}
         run: |
           sdk="$GITHUB_WORKSPACE/.cache/deps/sdk"
-          git -C "$sdk" apply "$GITHUB_WORKSPACE/tools/ci/gmod-sdk-posix-memoverride.patch"
           stage="$RUNNER_TEMP/package"
           toolchain=()
           if [[ "$ELF_CLASS" == ELF32 ]]; then
@@ -99,7 +88,7 @@ jobs:
             build="$RUNNER_TEMP/build-$variant"
             cmake -S vphysics_jolt -B "$build" -G Ninja \
               -DCMAKE_BUILD_TYPE=Release -DVOLT_GMOD_SDK="$sdk/gmod/src" \
-              -DGMOD_RUNTIME_ROOT="$RUNNER_TEMP/gmod" -DVOLT_CPU_VARIANT="$variant" \
+              -DVOLT_CPU_VARIANT="$variant" \
               -DVOLT_BUILD_LINUX_LUA_MODULES="$lua_modules" "${toolchain[@]}"
             cmake --build "$build" --parallel 2
             cmake --install "$build" --prefix "$stage" --strip

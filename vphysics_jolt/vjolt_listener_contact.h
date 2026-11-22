@@ -906,7 +906,7 @@ public:
 			return Result::Accept;
 		auto *object1 = reinterpret_cast< JoltPhysicsObject * >( body1.GetUserData() );
 		auto *object2 = reinterpret_cast< JoltPhysicsObject * >( body2.GetUserData() );
-		if ( !object1 || !object2 || object1->GetEnvironment() != object2->GetEnvironment()
+		if ( !object1 || !object2 || object1->GetJoltEnvironment() != object2->GetJoltEnvironment()
 			|| object1->IsFluid() || object2->IsFluid()
 			|| object1->IsTrigger() || object2->IsTrigger() )
 			return Result::Accept;
