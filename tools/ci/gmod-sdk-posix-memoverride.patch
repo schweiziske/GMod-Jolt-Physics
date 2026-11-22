@@ -1,0 +1,13 @@
+diff --git a/gmod/src/public/tier0/memoverride.cpp b/gmod/src/public/tier0/memoverride.cpp
+--- a/gmod/src/public/tier0/memoverride.cpp
++++ b/gmod/src/public/tier0/memoverride.cpp
+@@ -54,5 +54,9 @@ inline void __cdecl VPurecallHandler()
+ {
++#ifdef _WIN32
+     DebuggerBreakIfDebugging();	// give the debugger a chance to catch first
+     WriteMiniDump();
+     ExitProcess( EXIT_FAILURE );
++#else
++    std::abort();
++#endif
+ }
